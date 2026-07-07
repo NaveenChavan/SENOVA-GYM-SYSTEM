@@ -27,12 +27,16 @@ const TrainerDashboard = () => {
         showToastRef.current("Trainer profile injected successfully!", "success");
         setForm({ name: "", specialization: "Bodybuilding", phone: "" });
         refreshAll();
+      } else {
+        showToastRef.current(arg.error || "Failed to add trainer.", "error");
       }
     };
     const handleDelete = (_e, arg) => {
       if (arg.success) {
         showToastRef.current("Trainer profile successfully deleted from local system!", "success");
         refreshAll();
+      } else {
+        showToastRef.current(arg.error || "Failed to delete trainer.", "error");
       }
     };
 
@@ -46,9 +50,24 @@ const TrainerDashboard = () => {
   }, [refreshAll]);
 
   const handleSave = () => {
-    if (!form.name.trim() || !form.phone.trim())
+    const trimmedName = form.name.trim();
+    const trimmedPhone = form.phone.trim().replace(/^\+91/, "");
+
+    if (!trimmedName || !trimmedPhone)
       return showToast("All trainer fields are mandatory!", "error");
-    if (windowElectron) windowElectron.ipcRenderer.send("add-trainer", form);
+
+    if (!/^[A-Za-z][A-Za-z\s.\-]*$/.test(trimmedName))
+      return showToast("Name must contain only letters, spaces, dots or hyphens. Numbers are not allowed.", "error");
+
+    if (!/^\d{10}$/.test(trimmedPhone))
+      return showToast("Mobile number must be exactly 10 digits (numeric only).", "error");
+
+    if (windowElectron)
+      windowElectron.ipcRenderer.send("add-trainer", {
+        name: trimmedName,
+        specialization: form.specialization,
+        phone: trimmedPhone,
+      });
   };
 
   const handleDeleteTrainer = async (id) => {

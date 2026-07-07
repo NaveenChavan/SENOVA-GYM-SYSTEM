@@ -144,6 +144,9 @@ const MembersList = () => {
     if (!trimmedName || !trimmedPhone)
       return showToast("Name and Mobile Number cannot be empty.", "error");
 
+    if (!/^[A-Za-z][A-Za-z\s.\-]*$/.test(trimmedName))
+      return showToast("Name must contain only letters, spaces, dots or hyphens. Numbers are not allowed.", "error");
+
     if (!/^\d{10}$/.test(trimmedPhone))
       return showToast("Mobile number must be exactly 10 digits (numeric only).", "error");
 
