@@ -13,13 +13,30 @@ const AttendancePage = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [todayLog, setTodayLog] = useState([]);
 
+  // History state
+  const [historyDate, setHistoryDate] = useState(new Date().toISOString().split("T")[0]);
+  const [historyData, setHistoryData] = useState([]);
+  const [historySearch, setHistorySearch] = useState("");
+
   const showToastRef = useRef(showToast);
   useEffect(() => { showToastRef.current = showToast; }, [showToast]);
 
   const inputRef = useRef(null);
+  const historyDateRef = useRef(historyDate);
 
   const fetchTodayAttendance = () => {
     if (windowElectron) windowElectron.ipcRenderer.send("get-today-attendance");
+  };
+
+  const fetchHistory = (date) => {
+    if (windowElectron) windowElectron.ipcRenderer.send("get-attendance-history", date);
+  };
+
+  const handleHistoryDateChange = (e) => {
+    const newDate = e.target.value;
+    setHistoryDate(newDate);
+    historyDateRef.current = newDate;
+    fetchHistory(newDate);
   };
 
   useEffect(() => {
@@ -29,6 +46,7 @@ const AttendancePage = () => {
       if (arg.success) {
         showToastRef.current("Attendance marked successfully!", "success");
         fetchTodayAttendance();
+        fetchHistory(historyDateRef.current);
       } else if (arg.duplicate) {
         showToastRef.current("Attendance already marked for today.", "warning");
       } else {
@@ -40,14 +58,21 @@ const AttendancePage = () => {
       if (arg.success) setTodayLog(arg.data || []);
     };
 
+    const handleHistoryResponse = (_e, arg) => {
+      if (arg.success) setHistoryData(arg.data || []);
+    };
+
     windowElectron.ipcRenderer.on("mark-attendance-response", handleMarkResponse);
     windowElectron.ipcRenderer.on("get-today-attendance-response", handleTodayResponse);
+    windowElectron.ipcRenderer.on("get-attendance-history-response", handleHistoryResponse);
 
     fetchTodayAttendance();
+    fetchHistory(new Date().toISOString().split("T")[0]);
 
     return () => {
       windowElectron.ipcRenderer.removeListener("mark-attendance-response", handleMarkResponse);
       windowElectron.ipcRenderer.removeListener("get-today-attendance-response", handleTodayResponse);
+      windowElectron.ipcRenderer.removeListener("get-attendance-history-response", handleHistoryResponse);
     };
   }, []);
 
@@ -102,6 +127,12 @@ const AttendancePage = () => {
     setSearchPhone("");
     setTimeout(() => inputRef.current?.focus(), 0);
   };
+
+  const filteredHistory = historyData.filter((entry) => {
+    if (!historySearch.trim()) return true;
+    const term = historySearch.trim().toLowerCase();
+    return entry.memberName.toLowerCase().includes(term) || entry.phone.includes(term);
+  });
 
   return (
     <div className="p-8 space-y-6 bg-[#F8FAFC] min-h-screen font-sans text-slate-800">
@@ -232,6 +263,53 @@ const AttendancePage = () => {
                 <span className="text-[11px] font-bold text-slate-500 font-mono">
                   {new Date(entry.checkInTime).toLocaleTimeString()}
                 </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Attendance History */}
+      <div className="bg-white border border-slate-200/80 p-6 rounded-2xl shadow-sm space-y-4">
+        <h3 className="text-xs font-bold text-blue-600 uppercase tracking-widest">
+          📅 Attendance History
+        </h3>
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="date"
+            value={historyDate}
+            onChange={handleHistoryDateChange}
+            className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
+          />
+          <input
+            type="text"
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            placeholder="Search by name or phone..."
+            className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-semibold text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
+          />
+        </div>
+        <p className="text-[11px] font-bold text-slate-400">
+          Total Records: {filteredHistory.length}
+        </p>
+        {filteredHistory.length === 0 ? (
+          <p className="text-xs text-slate-400 italic py-4 text-center">
+            No attendance records found for this date.
+          </p>
+        ) : (
+          <div className="divide-y divide-slate-100 max-h-[350px] overflow-y-auto">
+            {filteredHistory.map((entry) => (
+              <div key={entry.id} className="flex justify-between items-center py-2.5">
+                <div>
+                  <p className="text-sm font-bold text-slate-800">{entry.memberName}</p>
+                  <p className="text-[11px] font-mono text-slate-400">{entry.phone}</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-[11px] font-bold text-slate-500 font-mono">
+                    {new Date(entry.checkInTime).toLocaleTimeString()}
+                  </span>
+                  <p className="text-[10px] text-slate-400 font-mono">{entry.date}</p>
+                </div>
               </div>
             ))}
           </div>
