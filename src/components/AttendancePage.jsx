@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import useGymStore from "../store/gymStore";
 import { useUI } from "../context/UIContext";
+const windowElectron = window.require ? window.require("electron") : null;
 
 const AttendancePage = () => {
   // Consume from centralized store
@@ -10,6 +11,45 @@ const AttendancePage = () => {
   const [searchPhone, setSearchPhone] = useState("");
   const [scanResults, setScanResults] = useState([]);
   const [hasSearched, setHasSearched] = useState(false);
+  const [todayLog, setTodayLog] = useState([]);
+
+  const showToastRef = useRef(showToast);
+  useEffect(() => { showToastRef.current = showToast; }, [showToast]);
+
+  const inputRef = useRef(null);
+
+  const fetchTodayAttendance = () => {
+    if (windowElectron) windowElectron.ipcRenderer.send("get-today-attendance");
+  };
+
+  useEffect(() => {
+    if (!windowElectron) return;
+
+    const handleMarkResponse = (_e, arg) => {
+      if (arg.success) {
+        showToastRef.current("Attendance marked successfully!", "success");
+        fetchTodayAttendance();
+      } else if (arg.duplicate) {
+        showToastRef.current("Attendance already marked for today.", "warning");
+      } else {
+        showToastRef.current(arg.error || "Failed to mark attendance.", "error");
+      }
+    };
+
+    const handleTodayResponse = (_e, arg) => {
+      if (arg.success) setTodayLog(arg.data || []);
+    };
+
+    windowElectron.ipcRenderer.on("mark-attendance-response", handleMarkResponse);
+    windowElectron.ipcRenderer.on("get-today-attendance-response", handleTodayResponse);
+
+    fetchTodayAttendance();
+
+    return () => {
+      windowElectron.ipcRenderer.removeListener("mark-attendance-response", handleMarkResponse);
+      windowElectron.ipcRenderer.removeListener("get-today-attendance-response", handleTodayResponse);
+    };
+  }, []);
 
   const triggerMockScan = () => {
     const trimmedInput = searchPhone.trim();
@@ -35,6 +75,15 @@ const AttendancePage = () => {
               ? "Access Denied: Membership Expired! ❌"
               : "Access Granted: Welcome Active Member! 🎉";
 
+        // Auto-mark attendance when access is granted
+        if (accessGranted && windowElectron) {
+          windowElectron.ipcRenderer.send("mark-attendance", {
+            memberId: member.id,
+            memberName: member.name,
+            phone: member.phone,
+          });
+        }
+
         return {
           id: member.id,
           success: accessGranted,
@@ -49,6 +98,9 @@ const AttendancePage = () => {
     } else {
       setScanResults([]);
     }
+
+    setSearchPhone("");
+    setTimeout(() => inputRef.current?.focus(), 0);
   };
 
   return (
@@ -80,6 +132,7 @@ const AttendancePage = () => {
               Scan Card / Mobile Sequence
             </label>
             <input
+              ref={inputRef}
               type="text"
               value={searchPhone}
               onChange={(e) => setSearchPhone(e.target.value)}
@@ -152,6 +205,37 @@ const AttendancePage = () => {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Today's Attendance Log */}
+      <div className="bg-white border border-slate-200/80 p-6 rounded-2xl shadow-sm space-y-4">
+        <div className="flex justify-between items-center">
+          <h3 className="text-xs font-bold text-blue-600 uppercase tracking-widest">
+            📋 Today's Attendance ({todayLog.length})
+          </h3>
+          <span className="text-[10px] font-bold text-slate-400">
+            {new Date().toISOString().split("T")[0]}
+          </span>
+        </div>
+        {todayLog.length === 0 ? (
+          <p className="text-xs text-slate-400 italic py-4 text-center">
+            No attendance records for today yet.
+          </p>
+        ) : (
+          <div className="divide-y divide-slate-100 max-h-[300px] overflow-y-auto">
+            {todayLog.map((entry) => (
+              <div key={entry.id} className="flex justify-between items-center py-2.5">
+                <div>
+                  <p className="text-sm font-bold text-slate-800">{entry.memberName}</p>
+                  <p className="text-[11px] font-mono text-slate-400">{entry.phone}</p>
+                </div>
+                <span className="text-[11px] font-bold text-slate-500 font-mono">
+                  {new Date(entry.checkInTime).toLocaleTimeString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
