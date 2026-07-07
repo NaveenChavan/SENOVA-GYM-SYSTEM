@@ -112,6 +112,8 @@ const MembersPage = () => {
 
         // Refresh centralized store so all pages update
         refreshAll();
+      } else {
+        showToastRef.current(arg.error || "Failed to add member.", "error");
       }
     };
 
@@ -132,11 +134,21 @@ const MembersPage = () => {
   };
 
   const handleSave = () => {
-    if (!formData.name.trim() || !formData.phone.trim())
+    const trimmedName = formData.name.trim();
+    const trimmedPhone = formData.phone.trim().replace(/^\+91/, "");
+
+    if (!trimmedName || !trimmedPhone)
       return showToast(
         "Member Name and Mobile Number are strictly mandatory!",
         "error",
       );
+
+    if (!/^\d{10}$/.test(trimmedPhone))
+      return showToast(
+        "Mobile number must be exactly 10 digits (numeric only).",
+        "error",
+      );
+
     let daysToAdd = 30;
     if (formData.plan.includes("3")) daysToAdd = 90;
     else if (formData.plan.includes("6")) daysToAdd = 180;
@@ -151,6 +163,8 @@ const MembersPage = () => {
 
     const payload = {
       ...formData,
+      name: trimmedName,
+      phone: trimmedPhone,
       joinDate: new Date().toISOString().split("T")[0],
       expiryDate: expiry.toISOString().split("T")[0],
     };

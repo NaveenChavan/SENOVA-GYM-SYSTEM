@@ -41,14 +41,20 @@ const MembersList = () => {
 
     const handleUpdateResponse = (_e, arg) => {
       if (arg.success) {
+        showToast("Member updated successfully!", "success");
         setEditingId(null);
         refreshAll();
+      } else {
+        showToast(arg.error || "Failed to update member.", "error");
       }
     };
 
     const handleDeleteResponse = (_e, arg) => {
       if (arg.success) {
+        showToast("Member deleted successfully.", "success");
         refreshAll();
+      } else {
+        showToast(arg.error || "Failed to delete member.", "error");
       }
     };
 
@@ -132,11 +138,20 @@ const MembersList = () => {
   };
 
   const handleSaveEdit = () => {
+    const trimmedName = (editForm.name || "").trim();
+    const trimmedPhone = (editForm.phone || "").trim().replace(/^\+91/, "");
+
+    if (!trimmedName || !trimmedPhone)
+      return showToast("Name and Mobile Number cannot be empty.", "error");
+
+    if (!/^\d{10}$/.test(trimmedPhone))
+      return showToast("Mobile number must be exactly 10 digits (numeric only).", "error");
+
     if (windowElectron) {
       windowElectron.ipcRenderer.send("update-member", {
         id: editForm.id,
-        name: editForm.name,
-        phone: editForm.phone,
+        name: trimmedName,
+        phone: trimmedPhone,
         age: editForm.age,
         sex: editForm.sex,
         plan: editForm.plan,
