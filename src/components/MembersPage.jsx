@@ -3,6 +3,11 @@ import useGymStore from "../store/gymStore";
 import { useUI } from "../context/UIContext";
 const windowElectron = window.require ? window.require("electron") : null;
 
+const getLocalDate = (date) => {
+  const d = date || new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
 const MembersPage = () => {
   // Consume from centralized store
   const settings = useGymStore((state) => state.settings);
@@ -22,10 +27,11 @@ const MembersPage = () => {
     age: "",
     sex: "Male",
     plan: gymConfig.gymPlans[0] || "Monthly",
-    paymentMode: "UPI / GooglePay",
+    paymentMode: "Cash",
     amountPaid: "",
     amountPending: "0",
     assignedTrainerId: "None",
+    joinDate: getLocalDate(),
     photo: null,
   });
 
@@ -79,11 +85,10 @@ const MembersPage = () => {
           currentData.plan.toLowerCase().includes("year")
         )
           daysToAdd = 365;
-        const expiryDateStr = new Date(
-          new Date().getTime() + daysToAdd * 24 * 60 * 60 * 1000,
-        )
-          .toISOString()
-          .split("T")[0];
+        const baseForExpiry = currentData.joinDate ? new Date(currentData.joinDate) : new Date();
+        const expiryDateStr = getLocalDate(new Date(
+          baseForExpiry.getTime() + daysToAdd * 24 * 60 * 60 * 1000,
+        ));
 
         if (windowElectron) {
           windowElectron.ipcRenderer.send("send-whatsapp-bill", {
@@ -103,10 +108,11 @@ const MembersPage = () => {
           age: "",
           sex: "Male",
           plan: currentConfig.gymPlans[0] || "Monthly",
-          paymentMode: "UPI / GooglePay",
+          paymentMode: "Cash",
           amountPaid: "",
           amountPending: "0",
           assignedTrainerId: "None",
+          joinDate: getLocalDate(),
           photo: null,
         });
 
@@ -163,16 +169,20 @@ const MembersPage = () => {
       formData.plan.toLowerCase().includes("year")
     )
       daysToAdd = 365;
-    const expiry = new Date(
-      new Date().getTime() + daysToAdd * 24 * 60 * 60 * 1000,
-    );
+
+    const baseDate = formData.joinDate ? new Date(formData.joinDate) : new Date();
+    const expiry = new Date(baseDate.getTime() + daysToAdd * 24 * 60 * 60 * 1000);
+
+    const now = new Date();
+    const joinTime = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
     const payload = {
       ...formData,
       name: trimmedName,
       phone: trimmedPhone,
-      joinDate: new Date().toISOString().split("T")[0],
-      expiryDate: expiry.toISOString().split("T")[0],
+      joinDate: formData.joinDate || getLocalDate(),
+      joinTime: joinTime,
+      expiryDate: getLocalDate(expiry),
     };
     if (windowElectron) windowElectron.ipcRenderer.send("add-member", payload);
   };
@@ -339,6 +349,52 @@ const MembersPage = () => {
               </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+              <div>
+                <label className="text-xs text-slate-500 block mb-1.5 font-bold">
+                  Joining Date
+                </label>
+                <input
+                  type="date"
+                  name="joinDate"
+                  value={formData.joinDate}
+                  onChange={handleInputChange}
+                  className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold font-mono"
+                />
+              </div>
+              <div className="flex items-end">
+                <div className="w-full bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+                  <p className="text-[11px] font-bold text-blue-600">
+                    📅 Expiry: <span className="font-mono font-black">{(() => {
+                      let d = 30;
+                      if (formData.plan.includes("3")) d = 90;
+                      else if (formData.plan.includes("6")) d = 180;
+                      else if (formData.plan.includes("1") || formData.plan.toLowerCase().includes("year")) d = 365;
+                      const base = formData.joinDate ? new Date(formData.joinDate) : new Date();
+                      return getLocalDate(new Date(base.getTime() + d * 24 * 60 * 60 * 1000));
+                    })()}</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+              <div>
+                <label className="text-xs text-slate-500 block mb-1.5 font-bold">
+                  Payment Mode
+                </label>
+                <select
+                  name="paymentMode"
+                  value={formData.paymentMode}
+                  onChange={handleInputChange}
+                  className="w-full bg-slate-50/50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold"
+                >
+                  <option value="Cash">Cash</option>
+                  <option value="UPI">UPI</option>
+                  <option value="Google Pay">Google Pay</option>
+                  <option value="PhonePe">PhonePe</option>
+                  <option value="Card">Card</option>
+                  <option value="Other">Other</option>
+                </select>
+              </div>
               <div>
                 <label className="text-xs text-slate-500 block mb-1.5 font-bold">
                   Amount Paid (INR)
