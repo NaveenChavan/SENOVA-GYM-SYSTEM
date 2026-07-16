@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const { Client, LocalAuth } = require("whatsapp-web.js");
@@ -662,6 +662,118 @@ ipcMain.on("send-whatsapp-bill", (event, payload) => {
     whatsappClient
       .sendMessage(chatId, messageText)
       .catch((e) => console.error(e));
+  }
+});
+
+// ========================================================
+// REPORTS MODULE IPC HANDLERS (Sprint 5A)
+// ========================================================
+
+ipcMain.on("get-report-pending-payments", (event) => {
+  db.all(
+    `SELECT id, name, phone, plan, amountPaid, amountPending, expiryDate, status FROM members WHERE CAST(amountPending AS REAL) > 0 ORDER BY CAST(amountPending AS REAL) DESC`,
+    [],
+    (err, rows) => {
+      if (err) event.reply("get-report-pending-payments-response", { success: false, error: err.message });
+      else event.reply("get-report-pending-payments-response", { success: true, data: rows });
+    }
+  );
+});
+
+ipcMain.on("get-report-expiring-members", (event, days) => {
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const future = new Date(now.getTime() + (days || 7) * 24 * 60 * 60 * 1000);
+  const futureDate = `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, "0")}-${String(future.getDate()).padStart(2, "0")}`;
+  db.all(
+    `SELECT id, name, phone, plan, expiryDate, status, assignedTrainerId FROM members WHERE status = 'Active' AND expiryDate >= ? AND expiryDate <= ? ORDER BY expiryDate ASC`,
+    [today, futureDate],
+    (err, rows) => {
+      if (err) event.reply("get-report-expiring-members-response", { success: false, error: err.message });
+      else event.reply("get-report-expiring-members-response", { success: true, data: rows });
+    }
+  );
+});
+
+ipcMain.on("get-report-attendance-range", (event, payload) => {
+  const { startDate, endDate } = payload;
+  db.all(
+    `SELECT * FROM attendance WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC`,
+    [startDate, endDate],
+    (err, rows) => {
+      if (err) event.reply("get-report-attendance-range-response", { success: false, error: err.message });
+      else event.reply("get-report-attendance-range-response", { success: true, data: rows });
+    }
+  );
+});
+
+ipcMain.on("get-report-revenue-summary", (event) => {
+  db.all(
+    `SELECT plan, COUNT(*) as memberCount, SUM(CAST(amountPaid AS REAL)) as totalPaid, SUM(CAST(amountPending AS REAL)) as totalPending FROM members GROUP BY plan ORDER BY totalPaid DESC`,
+    [],
+    (err, rows) => {
+      if (err) event.reply("get-report-revenue-summary-response", { success: false, error: err.message });
+      else event.reply("get-report-revenue-summary-response", { success: true, data: rows });
+    }
+  );
+});
+
+ipcMain.on("get-report-member-growth", (event) => {
+  db.all(
+    `SELECT substr(joinDate, 1, 7) as month, COUNT(*) as count FROM members WHERE joinDate IS NOT NULL AND joinDate != '' GROUP BY month ORDER BY month ASC`,
+    [],
+    (err, rows) => {
+      if (err) event.reply("get-report-member-growth-response", { success: false, error: err.message });
+      else event.reply("get-report-member-growth-response", { success: true, data: rows });
+    }
+  );
+});
+
+ipcMain.on("get-report-trainer-load", (event) => {
+  db.all(`SELECT * FROM trainers ORDER BY id DESC`, [], (err, trainers) => {
+    if (err) return event.reply("get-report-trainer-load-response", { success: false, error: err.message });
+    db.all(
+      `SELECT assignedTrainerId, COUNT(*) as clientCount FROM members WHERE status = 'Active' AND assignedTrainerId != 'None' GROUP BY assignedTrainerId`,
+      [],
+      (memErr, counts) => {
+        if (memErr) return event.reply("get-report-trainer-load-response", { success: false, error: memErr.message });
+        const countMap = {};
+        (counts || []).forEach((c) => { countMap[String(c.assignedTrainerId)] = c.clientCount; });
+        const result = trainers.map((t) => ({
+          id: t.id,
+          name: t.name,
+          specialization: t.specialization,
+          phone: t.phone,
+          activeClients: countMap[String(t.id)] || 0,
+        }));
+        event.reply("get-report-trainer-load-response", { success: true, data: result });
+      }
+    );
+  });
+});
+
+ipcMain.on("export-report-csv", async (event, payload) => {
+  const { headers, rows, defaultFilename } = payload;
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Export Report as CSV",
+      defaultPath: defaultFilename || "report.csv",
+      filters: [{ name: "CSV Files", extensions: ["csv"] }],
+    });
+    if (result.canceled || !result.filePath) {
+      return event.reply("export-report-csv-response", { success: false, canceled: true });
+    }
+    const escapeCsv = (val) => {
+      const str = String(val == null ? "" : val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n")) return `"${str.replace(/"/g, '""')}"`;
+      return str;
+    };
+    const csvLines = [headers.map(escapeCsv).join(",")];
+    rows.forEach((row) => { csvLines.push(row.map(escapeCsv).join(",")); });
+    fs.writeFileSync(result.filePath, "\uFEFF" + csvLines.join("\n"), "utf8");
+    event.reply("export-report-csv-response", { success: true, filePath: result.filePath });
+  } catch (err) {
+    event.reply("export-report-csv-response", { success: false, error: err.message });
   }
 });
 

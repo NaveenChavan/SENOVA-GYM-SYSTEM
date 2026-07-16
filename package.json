@@ -2,17 +2,23 @@
   "name": "frontend",
   "private": true,
   "version": "0.0.0",
-  "type": "module",
+  "main": "main.js",
   "scripts": {
+    "start": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"
   },
   "dependencies": {
+    "concurrently": "^10.0.3",
+    "electron": "^42.5.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "sqlite3": "^6.0.1",
+    "wait-on": "^9.0.10",
+    "whatsapp-web.js": "^1.34.7",
     "zustand": "5.0.5"
   },
   "devDependencies": {

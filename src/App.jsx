@@ -7,6 +7,7 @@ import WhatsAppHistory from "./components/WhatsAppHistory";
 import SettingsPage from "./components/SettingsPage";
 import TrainerDashboard from "./components/TrainerDashboard";
 import AttendancePage from "./components/AttendancePage";
+import ReportsPage from "./components/ReportsPage";
 import OnboardingWizard from "./components/OnboardingWizard";
 import useGymStore from "./store/gymStore";
 import { UIProvider } from "./context/UIContext";
@@ -53,6 +54,8 @@ function App() {
         {activeTab === "attendance" && <AttendancePage />}
 
         {activeTab === "analysis" && <OverviewGrid />}
+
+        {activeTab === "reports" && <ReportsPage />}
 
         {activeTab === "whatsapp" && <WhatsAppHistory />}
 

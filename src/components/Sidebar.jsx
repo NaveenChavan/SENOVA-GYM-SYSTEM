@@ -33,6 +33,12 @@ const Sidebar = ({ activeTab, setActiveTab }) => {
       icon: "📊",
     },
     {
+      id: "reports",
+      label: "Reports & Export",
+      subLabel: "Generate CSV Reports",
+      icon: "📑",
+    },
+    {
       id: "whatsapp",
       label: "WhatsApp History",
       subLabel: "Communication Logs",
