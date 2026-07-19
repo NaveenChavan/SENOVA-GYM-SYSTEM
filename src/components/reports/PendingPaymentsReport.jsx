@@ -1,9 +1,22 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import ReportFilters from "./ReportFilters";
+import ReportExportBar from "./ReportExportBar";
 const windowElectron = window.require ? window.require("electron") : null;
 
 const PendingPaymentsReport = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({ plan: "", trainer: "", status: "" });
+
+  const fetchReport = useCallback((activeFilters) => {
+    if (!windowElectron) return;
+    setLoading(true);
+    const payload = {};
+    if (activeFilters.plan) payload.plan = activeFilters.plan;
+    if (activeFilters.trainer) payload.trainer = activeFilters.trainer;
+    if (activeFilters.status) payload.status = activeFilters.status;
+    windowElectron.ipcRenderer.send("get-report-pending-payments", Object.keys(payload).length > 0 ? payload : undefined);
+  }, []);
 
   useEffect(() => {
     if (!windowElectron) return;
@@ -12,24 +25,26 @@ const PendingPaymentsReport = () => {
       if (arg.success) setData(arg.data || []);
     };
     windowElectron.ipcRenderer.on("get-report-pending-payments-response", handleResponse);
-    windowElectron.ipcRenderer.send("get-report-pending-payments");
+    fetchReport(filters);
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-pending-payments-response", handleResponse);
     };
   }, []);
 
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters);
+    fetchReport(newFilters);
+  };
+
   const totalPending = data.reduce((acc, m) => acc + Number(m.amountPending || 0), 0);
 
-  const handleExport = () => {
-    if (!windowElectron || data.length === 0) return;
-    const headers = ["Name", "Phone", "Plan", "Amount Paid", "Amount Pending", "Expiry Date", "Status"];
-    const rows = data.map((m) => [m.name, m.phone, m.plan, m.amountPaid, m.amountPending, m.expiryDate, m.status]);
-    windowElectron.ipcRenderer.send("export-report-csv", {
-      headers,
-      rows,
-      defaultFilename: `pending-payments-${new Date().toISOString().split("T")[0]}.csv`,
-    });
-  };
+  // Export data preparation
+  const exportHeaders = ["Name", "Phone", "Plan", "Amount Paid", "Amount Pending", "Expiry Date", "Status"];
+  const exportRows = data.map((m) => [m.name, m.phone, m.plan, m.amountPaid, m.amountPending, m.expiryDate, m.status]);
+  const summaryCards = [
+    { label: "Members with Dues", value: data.length },
+    { label: "Total Pending", value: `₹${totalPending}` },
+  ];
 
   if (loading) {
     return (
@@ -42,8 +57,28 @@ const PendingPaymentsReport = () => {
 
   return (
     <div className="space-y-4">
+      {/* Filters & Export Bar */}
+      <div className="flex flex-wrap items-start gap-3">
+        <ReportFilters
+          showPlan
+          showTrainer
+          showStatus
+          filters={filters}
+          onFilterChange={handleFilterChange}
+        />
+        <ReportExportBar
+          title="Pending Payments Report"
+          headers={exportHeaders}
+          rows={exportRows}
+          summaryCards={summaryCards}
+          csvFilename={`pending-payments-${new Date().toISOString().split("T")[0]}.csv`}
+          pdfFilename={`pending-payments-${new Date().toISOString().split("T")[0]}.pdf`}
+          disabled={data.length === 0}
+        />
+      </div>
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Members with Dues</p>
           <h3 className="text-xl font-black text-slate-900 mt-1 font-mono">{data.length}</h3>
@@ -51,15 +86,6 @@ const PendingPaymentsReport = () => {
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Pending</p>
           <h3 className="text-xl font-black text-rose-500 mt-1 font-mono">₹{totalPending}</h3>
-        </div>
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex items-center justify-center">
-          <button
-            onClick={handleExport}
-            disabled={data.length === 0}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all"
-          >
-            📥 Export CSV
-          </button>
         </div>
       </div>
 

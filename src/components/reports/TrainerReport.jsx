@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import ReportExportBar from "./ReportExportBar";
 const windowElectron = window.require ? window.require("electron") : null;
 
 const TrainerReport = () => {
@@ -21,16 +22,13 @@ const TrainerReport = () => {
   const totalClients = data.reduce((acc, t) => acc + t.activeClients, 0);
   const maxClients = Math.max(...data.map((t) => t.activeClients), 1);
 
-  const handleExport = () => {
-    if (!windowElectron || data.length === 0) return;
-    const headers = ["Trainer Name", "Specialization", "Phone", "Active Clients"];
-    const rows = data.map((t) => [t.name, t.specialization, t.phone, t.activeClients]);
-    windowElectron.ipcRenderer.send("export-report-csv", {
-      headers,
-      rows,
-      defaultFilename: `trainer-load-${new Date().toISOString().split("T")[0]}.csv`,
-    });
-  };
+  // Export data preparation
+  const exportHeaders = ["Trainer Name", "Specialization", "Phone", "Active Clients"];
+  const exportRows = data.map((t) => [t.name, t.specialization, t.phone, t.activeClients]);
+  const summaryCards = [
+    { label: "Total Trainers", value: data.length },
+    { label: "Total Assigned Clients", value: totalClients },
+  ];
 
   if (loading) {
     return (
@@ -43,8 +41,19 @@ const TrainerReport = () => {
 
   return (
     <div className="space-y-4">
+      {/* Export Bar */}
+      <ReportExportBar
+        title="Trainer Load Report"
+        headers={exportHeaders}
+        rows={exportRows}
+        summaryCards={summaryCards}
+        csvFilename={`trainer-load-${new Date().toISOString().split("T")[0]}.csv`}
+        pdfFilename={`trainer-load-${new Date().toISOString().split("T")[0]}.pdf`}
+        disabled={data.length === 0}
+      />
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Trainers</p>
           <h3 className="text-xl font-black text-slate-900 mt-1 font-mono">{data.length}</h3>
@@ -52,15 +61,6 @@ const TrainerReport = () => {
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Assigned Clients</p>
           <h3 className="text-xl font-black text-blue-600 mt-1 font-mono">{totalClients}</h3>
-        </div>
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex items-center justify-center">
-          <button
-            onClick={handleExport}
-            disabled={data.length === 0}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all"
-          >
-            📥 Export CSV
-          </button>
         </div>
       </div>
 

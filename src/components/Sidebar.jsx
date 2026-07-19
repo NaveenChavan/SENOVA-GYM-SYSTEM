@@ -1,4 +1,5 @@
 import React from "react";
+import logo from "../assets/logo.jpeg";
 
 const Sidebar = ({ activeTab, setActiveTab }) => {
   const menuItems = [
@@ -58,8 +59,8 @@ const Sidebar = ({ activeTab, setActiveTab }) => {
         {/* BRANDING: SENOVA Digital Labs Header Block */}
         <div className="flex flex-col space-y-1 px-3 py-4 border-b border-slate-100">
           <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center font-black text-white text-base shadow-md shadow-blue-600/20">
-              SD
+            <div className="w-9 h-9 rounded-xl overflow-hidden shadow-md shadow-blue-600/20">
+              <img src={logo} alt="Logo" className="w-full h-full object-cover" />
             </div>
             <div>
               <h2 className="text-sm font-black text-slate-900 tracking-tight leading-tight">

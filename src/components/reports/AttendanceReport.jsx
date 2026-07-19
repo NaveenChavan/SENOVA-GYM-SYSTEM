@@ -1,4 +1,6 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import ReportFilters from "./ReportFilters";
+import ReportExportBar from "./ReportExportBar";
 const windowElectron = window.require ? window.require("electron") : null;
 
 const getLocalDate = (date) => {
@@ -9,14 +11,20 @@ const getLocalDate = (date) => {
 const AttendanceReport = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [startDate, setStartDate] = useState(getLocalDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)));
-  const [endDate, setEndDate] = useState(getLocalDate());
+  const [filters, setFilters] = useState({
+    startDate: getLocalDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)),
+    endDate: getLocalDate(),
+  });
 
-  const fetchReport = () => {
+  const fetchReport = useCallback((activeFilters) => {
     if (!windowElectron) return;
+    if (!activeFilters.startDate || !activeFilters.endDate) return;
     setLoading(true);
-    windowElectron.ipcRenderer.send("get-report-attendance-range", { startDate, endDate });
-  };
+    windowElectron.ipcRenderer.send("get-report-attendance-range", {
+      startDate: activeFilters.startDate,
+      endDate: activeFilters.endDate,
+    });
+  }, []);
 
   useEffect(() => {
     if (!windowElectron) return;
@@ -25,11 +33,19 @@ const AttendanceReport = () => {
       if (arg.success) setData(arg.data || []);
     };
     windowElectron.ipcRenderer.on("get-report-attendance-range-response", handleResponse);
-    fetchReport();
+    fetchReport(filters);
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-attendance-range-response", handleResponse);
     };
   }, []);
+
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters);
+  };
+
+  const handleApply = () => {
+    fetchReport(filters);
+  };
 
   // Group by date for summary
   const dateGroups = data.reduce((acc, entry) => {
@@ -39,50 +55,35 @@ const AttendanceReport = () => {
   const uniqueDates = Object.keys(dateGroups).sort().reverse();
   const avgPerDay = uniqueDates.length > 0 ? Math.round(data.length / uniqueDates.length) : 0;
 
-  const handleExport = () => {
-    if (!windowElectron || data.length === 0) return;
-    const headers = ["Date", "Member Name", "Phone", "Check-in Time"];
-    const rows = data.map((a) => [a.date, a.memberName, a.phone, new Date(a.checkInTime).toLocaleTimeString()]);
-    windowElectron.ipcRenderer.send("export-report-csv", {
-      headers,
-      rows,
-      defaultFilename: `attendance-${startDate}-to-${endDate}.csv`,
-    });
-  };
+  // Export data preparation
+  const exportHeaders = ["Date", "Member Name", "Phone", "Check-in Time"];
+  const exportRows = data.map((a) => [a.date, a.memberName, a.phone, new Date(a.checkInTime).toLocaleTimeString()]);
+  const summaryCards = [
+    { label: "Total Check-ins", value: data.length },
+    { label: "Days Covered", value: uniqueDates.length },
+    { label: "Avg per Day", value: avgPerDay },
+  ];
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm">
-          <span className="text-xs font-bold text-slate-500">From:</span>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold font-mono"
-          />
-          <span className="text-xs font-bold text-slate-500">To:</span>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold font-mono"
-          />
-          <button
-            onClick={fetchReport}
-            className="bg-slate-900 text-white text-xs font-bold px-4 py-1.5 rounded-lg hover:bg-slate-800 transition-all"
-          >
-            Generate
-          </button>
-        </div>
-        <button
-          onClick={handleExport}
+      {/* Filters & Export */}
+      <div className="flex flex-wrap items-start gap-3">
+        <ReportFilters
+          showDateRange
+          filters={filters}
+          onFilterChange={handleFilterChange}
+          onApply={handleApply}
+        />
+        <ReportExportBar
+          title="Attendance Report"
+          subtitle={`${filters.startDate} to ${filters.endDate}`}
+          headers={exportHeaders}
+          rows={exportRows}
+          summaryCards={summaryCards}
+          csvFilename={`attendance-${filters.startDate}-to-${filters.endDate}.csv`}
+          pdfFilename={`attendance-${filters.startDate}-to-${filters.endDate}.pdf`}
           disabled={data.length === 0}
-          className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all"
-        >
-          📥 Export CSV
-        </button>
+        />
       </div>
 
       {/* Summary Cards */}

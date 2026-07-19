@@ -1,16 +1,22 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import ReportFilters from "./ReportFilters";
+import ReportExportBar from "./ReportExportBar";
 const windowElectron = window.require ? window.require("electron") : null;
 
 const ExpiringMembersReport = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [daysFilter, setDaysFilter] = useState(7);
+  const [filters, setFilters] = useState({ plan: "", trainer: "" });
 
-  const fetchReport = (days) => {
+  const fetchReport = useCallback((days, activeFilters) => {
     if (!windowElectron) return;
     setLoading(true);
-    windowElectron.ipcRenderer.send("get-report-expiring-members", days);
-  };
+    const payload = { days };
+    if (activeFilters.plan) payload.plan = activeFilters.plan;
+    if (activeFilters.trainer) payload.trainer = activeFilters.trainer;
+    windowElectron.ipcRenderer.send("get-report-expiring-members", payload);
+  }, []);
 
   useEffect(() => {
     if (!windowElectron) return;
@@ -19,7 +25,7 @@ const ExpiringMembersReport = () => {
       if (arg.success) setData(arg.data || []);
     };
     windowElectron.ipcRenderer.on("get-report-expiring-members-response", handleResponse);
-    fetchReport(daysFilter);
+    fetchReport(daysFilter, filters);
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-expiring-members-response", handleResponse);
     };
@@ -27,19 +33,21 @@ const ExpiringMembersReport = () => {
 
   const handleDaysChange = (days) => {
     setDaysFilter(days);
-    fetchReport(days);
+    fetchReport(days, filters);
   };
 
-  const handleExport = () => {
-    if (!windowElectron || data.length === 0) return;
-    const headers = ["Name", "Phone", "Plan", "Expiry Date", "Status"];
-    const rows = data.map((m) => [m.name, m.phone, m.plan, m.expiryDate, m.status]);
-    windowElectron.ipcRenderer.send("export-report-csv", {
-      headers,
-      rows,
-      defaultFilename: `expiring-members-${daysFilter}days-${new Date().toISOString().split("T")[0]}.csv`,
-    });
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters);
+    fetchReport(daysFilter, newFilters);
   };
+
+  // Export data preparation
+  const exportHeaders = ["Name", "Phone", "Plan", "Expiry Date", "Days Left"];
+  const exportRows = data.map((m) => {
+    const daysLeft = Math.ceil((new Date(m.expiryDate) - new Date()) / (1000 * 60 * 60 * 24));
+    return [m.name, m.phone, m.plan, m.expiryDate, daysLeft];
+  });
+  const summaryCards = [{ label: "Members Expiring", value: data.length }];
 
   if (loading) {
     return (
@@ -52,8 +60,9 @@ const ExpiringMembersReport = () => {
 
   return (
     <div className="space-y-4">
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Controls Row */}
+      <div className="flex flex-wrap items-start gap-3">
+        {/* Days Selector */}
         <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-4 py-2.5 shadow-sm">
           <span className="text-xs font-bold text-slate-500">Expiring within:</span>
           {[7, 15, 30].map((d) => (
@@ -70,14 +79,25 @@ const ExpiringMembersReport = () => {
             </button>
           ))}
         </div>
-        <button
-          onClick={handleExport}
-          disabled={data.length === 0}
-          className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all"
-        >
-          📥 Export CSV
-        </button>
+        <ReportFilters
+          showPlan
+          showTrainer
+          filters={filters}
+          onFilterChange={handleFilterChange}
+        />
       </div>
+
+      {/* Export Bar */}
+      <ReportExportBar
+        title="Expiring Members Report"
+        subtitle={`Members expiring within ${daysFilter} days`}
+        headers={exportHeaders}
+        rows={exportRows}
+        summaryCards={summaryCards}
+        csvFilename={`expiring-members-${daysFilter}days-${new Date().toISOString().split("T")[0]}.csv`}
+        pdfFilename={`expiring-members-${daysFilter}days-${new Date().toISOString().split("T")[0]}.pdf`}
+        disabled={data.length === 0}
+      />
 
       {/* Summary */}
       <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm inline-block">

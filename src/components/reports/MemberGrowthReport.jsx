@@ -1,9 +1,21 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
+import ReportFilters from "./ReportFilters";
+import ReportExportBar from "./ReportExportBar";
 const windowElectron = window.require ? window.require("electron") : null;
 
 const MemberGrowthReport = () => {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [filters, setFilters] = useState({ year: "", plan: "" });
+
+  const fetchReport = useCallback((activeFilters) => {
+    if (!windowElectron) return;
+    setLoading(true);
+    const payload = {};
+    if (activeFilters.year) payload.year = activeFilters.year;
+    if (activeFilters.plan) payload.plan = activeFilters.plan;
+    windowElectron.ipcRenderer.send("get-report-member-growth", Object.keys(payload).length > 0 ? payload : undefined);
+  }, []);
 
   useEffect(() => {
     if (!windowElectron) return;
@@ -12,26 +24,28 @@ const MemberGrowthReport = () => {
       if (arg.success) setData(arg.data || []);
     };
     windowElectron.ipcRenderer.on("get-report-member-growth-response", handleResponse);
-    windowElectron.ipcRenderer.send("get-report-member-growth");
+    fetchReport(filters);
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-member-growth-response", handleResponse);
     };
   }, []);
 
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters);
+    fetchReport(newFilters);
+  };
+
   const totalMembers = data.reduce((acc, r) => acc + r.count, 0);
   const maxCount = Math.max(...data.map((r) => r.count), 1);
 
-  const handleExport = () => {
-    if (!windowElectron || data.length === 0) return;
-    const headers = ["Month", "New Members"];
-    const rows = data.map((r) => [r.month, r.count]);
-    rows.push(["TOTAL", totalMembers]);
-    windowElectron.ipcRenderer.send("export-report-csv", {
-      headers,
-      rows,
-      defaultFilename: `member-growth-${new Date().toISOString().split("T")[0]}.csv`,
-    });
-  };
+  // Export data preparation
+  const exportHeaders = ["Month", "New Members"];
+  const exportRows = data.map((r) => [r.month, r.count]);
+  exportRows.push(["TOTAL", totalMembers]);
+  const summaryCards = [
+    { label: "Total Members Registered", value: totalMembers },
+    { label: "Months Tracked", value: data.length },
+  ];
 
   if (loading) {
     return (
@@ -44,8 +58,28 @@ const MemberGrowthReport = () => {
 
   return (
     <div className="space-y-4">
+      {/* Filters & Export Bar */}
+      <div className="flex flex-wrap items-start gap-3">
+        <ReportFilters
+          showYear
+          showPlan
+          filters={filters}
+          onFilterChange={handleFilterChange}
+        />
+        <ReportExportBar
+          title="Member Growth Report"
+          subtitle={filters.year ? `Year: ${filters.year}` : "All Time"}
+          headers={exportHeaders}
+          rows={exportRows}
+          summaryCards={summaryCards}
+          csvFilename={`member-growth-${new Date().toISOString().split("T")[0]}.csv`}
+          pdfFilename={`member-growth-${new Date().toISOString().split("T")[0]}.pdf`}
+          disabled={data.length === 0}
+        />
+      </div>
+
       {/* Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Members Registered</p>
           <h3 className="text-xl font-black text-slate-900 mt-1 font-mono">{totalMembers}</h3>
@@ -53,15 +87,6 @@ const MemberGrowthReport = () => {
         <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Months Tracked</p>
           <h3 className="text-xl font-black text-blue-600 mt-1 font-mono">{data.length}</h3>
-        </div>
-        <div className="bg-white border border-slate-200 p-4 rounded-2xl shadow-sm flex items-center justify-center">
-          <button
-            onClick={handleExport}
-            disabled={data.length === 0}
-            className="bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 text-white text-xs font-bold px-5 py-2.5 rounded-xl transition-all"
-          >
-            📥 Export CSV
-          </button>
         </div>
       </div>
 

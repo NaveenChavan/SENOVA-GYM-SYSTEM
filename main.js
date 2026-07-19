@@ -669,10 +669,115 @@ ipcMain.on("send-whatsapp-bill", (event, payload) => {
 // REPORTS MODULE IPC HANDLERS (Sprint 5A)
 // ========================================================
 
-ipcMain.on("get-report-pending-payments", (event) => {
+// REPORT SUMMARY CARDS (Sprint 5B)
+ipcMain.on("get-report-summary", (event) => {
+  const summary = {};
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+  const future7 = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const future7Date = `${future7.getFullYear()}-${String(future7.getMonth() + 1).padStart(2, "0")}-${String(future7.getDate()).padStart(2, "0")}`;
+
+  db.get(`SELECT COALESCE(SUM(CAST(amountPaid AS REAL)), 0) as totalRevenue, COALESCE(SUM(CAST(amountPending AS REAL)), 0) as totalPending FROM members`, [], (err, row) => {
+    if (err) return event.reply("get-report-summary-response", { success: false, error: err.message });
+    summary.totalRevenue = Math.round(row.totalRevenue);
+    summary.totalPending = Math.round(row.totalPending);
+
+    db.get(`SELECT COUNT(*) as count FROM members WHERE status = 'Active'`, [], (err2, row2) => {
+      if (err2) return event.reply("get-report-summary-response", { success: false, error: err2.message });
+      summary.activeMembers = row2.count;
+
+      db.get(`SELECT COUNT(*) as count FROM members WHERE status = 'Active' AND expiryDate >= ? AND expiryDate <= ?`, [today, future7Date], (err3, row3) => {
+        if (err3) return event.reply("get-report-summary-response", { success: false, error: err3.message });
+        summary.expiringMembers = row3.count;
+
+        db.get(`SELECT COUNT(*) as count FROM attendance WHERE date = ?`, [today], (err4, row4) => {
+          if (err4) return event.reply("get-report-summary-response", { success: false, error: err4.message });
+          summary.todayAttendance = row4.count;
+
+          event.reply("get-report-summary-response", { success: true, data: summary });
+        });
+      });
+    });
+  });
+});
+
+// PDF EXPORT (Sprint 5B) — Uses Electron's built-in printToPDF via hidden BrowserWindow
+ipcMain.on("export-report-pdf", async (event, payload) => {
+  const { title, headers, rows, subtitle, summaryCards, defaultFilename } = payload;
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "Export Report as PDF",
+      defaultPath: defaultFilename || "report.pdf",
+      filters: [{ name: "PDF Files", extensions: ["pdf"] }],
+    });
+    if (result.canceled || !result.filePath) {
+      return event.reply("export-report-pdf-response", { success: false, canceled: true });
+    }
+
+    // Build HTML content for PDF
+    const summaryHtml = summaryCards && summaryCards.length > 0
+      ? `<div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;">${summaryCards.map(c => `<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 14px;flex:1;min-width:120px;"><span style="display:block;font-size:9px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${c.label}</span><span style="display:block;font-size:14px;font-weight:900;color:#0f172a;margin-top:2px;">${c.value}</span></div>`).join("")}</div>`
+      : "";
+
+    const tableHtml = rows.length > 0
+      ? `<table style="width:100%;border-collapse:collapse;margin-top:8px;">
+          <thead><tr>${headers.map(h => `<th style="background:#f1f5f9;border:1px solid #e2e8f0;padding:6px 10px;text-align:left;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:#475569;">${h}</th>`).join("")}</tr></thead>
+          <tbody>${rows.map((row, i) => `<tr style="background:${i % 2 === 0 ? "#fff" : "#f8fafc"}">${row.map(cell => `<td style="border:1px solid #e2e8f0;padding:5px 10px;font-size:10px;color:#334155;">${cell ?? "—"}</td>`).join("")}</tr>`).join("")}</tbody>
+        </table>`
+      : `<p style="text-align:center;color:#94a3b8;padding:32px;font-size:12px;">No data available.</p>`;
+
+    const htmlContent = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:'Segoe UI',Arial,sans-serif;padding:24px;color:#1e293b;font-size:11px;}</style></head><body>
+      <div style="text-align:center;margin-bottom:16px;border-bottom:2px solid #e2e8f0;padding-bottom:12px;">
+        <h1 style="font-size:18px;font-weight:900;color:#0f172a;">${title}</h1>
+        ${subtitle ? `<p style="font-size:10px;color:#64748b;margin-top:4px;">${subtitle}</p>` : ""}
+        <p style="font-size:10px;color:#64748b;margin-top:4px;">Generated: ${new Date().toLocaleString()}</p>
+      </div>
+      ${summaryHtml}${tableHtml}
+      <div style="margin-top:16px;text-align:center;font-size:9px;color:#94a3b8;border-top:1px solid #e2e8f0;padding-top:8px;">SENOVA Gym Management System</div>
+    </body></html>`;
+
+    // Create hidden window for PDF generation
+    const pdfWindow = new BrowserWindow({
+      width: 800,
+      height: 600,
+      show: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true },
+    });
+
+    pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
+
+    pdfWindow.webContents.on("did-finish-load", async () => {
+      try {
+        const pdfBuffer = await pdfWindow.webContents.printToPDF({
+          marginsType: 0,
+          printBackground: true,
+          landscape: false,
+          pageSize: "A4",
+        });
+        fs.writeFileSync(result.filePath, pdfBuffer);
+        event.reply("export-report-pdf-response", { success: true, filePath: result.filePath });
+      } catch (pdfErr) {
+        event.reply("export-report-pdf-response", { success: false, error: pdfErr.message });
+      } finally {
+        pdfWindow.close();
+      }
+    });
+  } catch (err) {
+    event.reply("export-report-pdf-response", { success: false, error: err.message });
+  }
+});
+
+ipcMain.on("get-report-pending-payments", (event, filters) => {
+  const params = [];
+  let whereClause = `WHERE CAST(amountPending AS REAL) > 0`;
+  
+  if (filters && filters.plan) { whereClause += ` AND plan = ?`; params.push(filters.plan); }
+  if (filters && filters.trainer) { whereClause += ` AND assignedTrainerId = ?`; params.push(filters.trainer); }
+  if (filters && filters.status) { whereClause += ` AND status = ?`; params.push(filters.status); }
+
   db.all(
-    `SELECT id, name, phone, plan, amountPaid, amountPending, expiryDate, status FROM members WHERE CAST(amountPending AS REAL) > 0 ORDER BY CAST(amountPending AS REAL) DESC`,
-    [],
+    `SELECT id, name, phone, plan, amountPaid, amountPending, expiryDate, status, assignedTrainerId FROM members ${whereClause} ORDER BY CAST(amountPending AS REAL) DESC`,
+    params,
     (err, rows) => {
       if (err) event.reply("get-report-pending-payments-response", { success: false, error: err.message });
       else event.reply("get-report-pending-payments-response", { success: true, data: rows });
@@ -680,14 +785,31 @@ ipcMain.on("get-report-pending-payments", (event) => {
   );
 });
 
-ipcMain.on("get-report-expiring-members", (event, days) => {
+ipcMain.on("get-report-expiring-members", (event, payload) => {
+  // Backward compatible: payload can be a number (days) or an object {days, plan, trainer}
+  let days = 7, plan = null, trainer = null;
+  if (typeof payload === "number") {
+    days = payload;
+  } else if (payload && typeof payload === "object") {
+    days = payload.days || 7;
+    plan = payload.plan || null;
+    trainer = payload.trainer || null;
+  }
+  
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-  const future = new Date(now.getTime() + (days || 7) * 24 * 60 * 60 * 1000);
+  const future = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
   const futureDate = `${future.getFullYear()}-${String(future.getMonth() + 1).padStart(2, "0")}-${String(future.getDate()).padStart(2, "0")}`;
+  
+  const params = [today, futureDate];
+  let whereClause = `WHERE status = 'Active' AND expiryDate >= ? AND expiryDate <= ?`;
+  
+  if (plan) { whereClause += ` AND plan = ?`; params.push(plan); }
+  if (trainer) { whereClause += ` AND assignedTrainerId = ?`; params.push(trainer); }
+  
   db.all(
-    `SELECT id, name, phone, plan, expiryDate, status, assignedTrainerId FROM members WHERE status = 'Active' AND expiryDate >= ? AND expiryDate <= ? ORDER BY expiryDate ASC`,
-    [today, futureDate],
+    `SELECT id, name, phone, plan, expiryDate, status, assignedTrainerId FROM members ${whereClause} ORDER BY expiryDate ASC`,
+    params,
     (err, rows) => {
       if (err) event.reply("get-report-expiring-members-response", { success: false, error: err.message });
       else event.reply("get-report-expiring-members-response", { success: true, data: rows });
@@ -707,10 +829,17 @@ ipcMain.on("get-report-attendance-range", (event, payload) => {
   );
 });
 
-ipcMain.on("get-report-revenue-summary", (event) => {
+ipcMain.on("get-report-revenue-summary", (event, filters) => {
+  const params = [];
+  let whereClause = "";
+  
+  if (filters && filters.plan) { whereClause += (whereClause ? " AND" : " WHERE") + ` plan = ?`; params.push(filters.plan); }
+  if (filters && filters.year) { whereClause += (whereClause ? " AND" : " WHERE") + ` substr(joinDate, 1, 4) = ?`; params.push(filters.year); }
+  if (filters && filters.month) { whereClause += (whereClause ? " AND" : " WHERE") + ` substr(joinDate, 6, 2) = ?`; params.push(filters.month); }
+
   db.all(
-    `SELECT plan, COUNT(*) as memberCount, SUM(CAST(amountPaid AS REAL)) as totalPaid, SUM(CAST(amountPending AS REAL)) as totalPending FROM members GROUP BY plan ORDER BY totalPaid DESC`,
-    [],
+    `SELECT plan, COUNT(*) as memberCount, SUM(CAST(amountPaid AS REAL)) as totalPaid, SUM(CAST(amountPending AS REAL)) as totalPending FROM members${whereClause} GROUP BY plan ORDER BY totalPaid DESC`,
+    params,
     (err, rows) => {
       if (err) event.reply("get-report-revenue-summary-response", { success: false, error: err.message });
       else event.reply("get-report-revenue-summary-response", { success: true, data: rows });
@@ -718,10 +847,17 @@ ipcMain.on("get-report-revenue-summary", (event) => {
   );
 });
 
-ipcMain.on("get-report-member-growth", (event) => {
+ipcMain.on("get-report-member-growth", (event, filters) => {
+  const params = [];
+  let whereClause = `WHERE joinDate IS NOT NULL AND joinDate != ''`;
+  
+  if (filters && filters.year) { whereClause += ` AND substr(joinDate, 1, 4) = ?`; params.push(filters.year); }
+  if (filters && filters.month) { whereClause += ` AND substr(joinDate, 6, 2) = ?`; params.push(filters.month); }
+  if (filters && filters.plan) { whereClause += ` AND plan = ?`; params.push(filters.plan); }
+
   db.all(
-    `SELECT substr(joinDate, 1, 7) as month, COUNT(*) as count FROM members WHERE joinDate IS NOT NULL AND joinDate != '' GROUP BY month ORDER BY month ASC`,
-    [],
+    `SELECT substr(joinDate, 1, 7) as month, COUNT(*) as count FROM members ${whereClause} GROUP BY month ORDER BY month ASC`,
+    params,
     (err, rows) => {
       if (err) event.reply("get-report-member-growth-response", { success: false, error: err.message });
       else event.reply("get-report-member-growth-response", { success: true, data: rows });

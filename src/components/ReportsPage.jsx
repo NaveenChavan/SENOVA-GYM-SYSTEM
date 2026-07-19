@@ -5,6 +5,7 @@ import AttendanceReport from "./reports/AttendanceReport";
 import RevenueReport from "./reports/RevenueReport";
 import MemberGrowthReport from "./reports/MemberGrowthReport";
 import TrainerReport from "./reports/TrainerReport";
+import ReportSummaryCards from "./reports/ReportSummaryCards";
 
 const reportTabs = [
   { id: "pending", label: "Pending Payments", icon: "💰" },
@@ -31,11 +32,14 @@ const ReportsPage = () => {
               Reports & Analytics
             </h2>
             <p className="text-xs text-slate-500 mt-1">
-              Generate data reports and export as CSV.
+              Generate data reports and export as CSV, PDF, or print.
             </p>
           </div>
         </div>
       </div>
+
+      {/* Summary Cards */}
+      <ReportSummaryCards />
 
       {/* Report Tab Selector */}
       <div className="flex flex-wrap gap-2">
