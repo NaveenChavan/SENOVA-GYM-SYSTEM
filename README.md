@@ -33,6 +33,7 @@ integration for sending welcome bills and payment reminders.
   - [WhatsApp messaging](#whatsapp-messaging)
 - [Camera capture troubleshooting](#camera-capture-troubleshooting)
 - [Security and data notes](#security-and-data-notes)
+  - [Renderer security (context isolation)](#renderer-security-context-isolation)
 
 ---
 
@@ -65,13 +66,13 @@ integration for sending welcome bills and payment reminders.
 
 | Layer | Technology |
 | --- | --- |
-| Desktop shell | Electron |
-| UI | React 19 + Vite |
+| Desktop shell | Electron (isolated renderer — see [Renderer security](#renderer-security-context-isolation)) |
+| UI | React 19 + Vite 8 |
 | Styling | Tailwind CSS |
 | State | Zustand (`src/store/gymStore.js`) |
 | Database | SQLite (`sqlite3`) |
 | QR generation | `qrcode.react` (`QRCodeSVG`) |
-| Face recognition | `@vladmandic/face-api` (TensorFlow.js), models in `public/models` |
+| Face recognition | `@vladmandic/face-api` (TensorFlow.js), vendored in `public/vendor/`, models in `public/models` |
 | Messaging | `whatsapp-web.js` |
 | Linting | Oxlint |
 
@@ -128,19 +129,23 @@ npm run lint
 ```
 .
 ├── main.js                     # Electron main process: DB, IPC, WhatsApp, camera-session relay
+├── preload.js                  # contextBridge: exposes an allow-listed IPC API to the renderer
+├── scripts/
+│   └── sync-face-api-vendor.js # Copies face-api's prebuilt ESM bundle into public/vendor/ (postinstall)
 ├── src/
 │   ├── App.jsx                 # Tab router + onboarding gate
 │   ├── main.jsx                # React entry
 │   ├── store/gymStore.js       # Zustand store (members/trainers/settings via IPC)
 │   ├── context/UIContext.jsx   # Toasts / shared UI helpers
 │   ├── services/
-│   │   └── cameraServer.js     # Local HTTP capture server + session/token lifecycle
+│   │   ├── cameraServer.js     # Local HTTP capture server + session/token lifecycle
+│   │   └── faceRecognition.js  # face-api wrapper: models, descriptors, matching
 │   └── components/
 │       ├── MembersPage.jsx     # Member registration form (opens CameraCapture)
 │       ├── CameraCapture.jsx   # Reusable USB + Mobile-QR camera modal
 │       ├── MembersList.jsx     # Member management
 │       ├── TrainerDashboard.jsx
-│       ├── AttendancePage.jsx
+│       ├── AttendancePage.jsx  # Phone-number + Face Scan attendance
 │       ├── ReportsPage.jsx + reports/*
 │       ├── OverviewGrid.jsx
 │       ├── SettingsPage.jsx
@@ -149,9 +154,11 @@ npm run lint
 └── README.md
 ```
 
-The renderer talks to the main process over Electron IPC using
-`window.require("electron").ipcRenderer`. The Zustand store registers the
-IPC response listeners once and broadcasts data to all pages.
+The renderer runs with `nodeIntegration: false` and `contextIsolation: true`; it
+talks to the main process exclusively through `window.electron.ipcRenderer`, a
+minimal API exposed by `preload.js` via `contextBridge` (see
+[Renderer security](#renderer-security-context-isolation)). The Zustand store
+registers the IPC response listeners once and broadcasts data to all pages.
 
 ### Where data is stored
 
@@ -241,18 +248,35 @@ marked and the gate result shows their photo for visual confirmation.
 photos** (the ones captured during registration):
 
 1. Switch the Device Terminal to the **Face Scan** tab. The camera starts and
-   the app loads the face models, then prepares each member's face data (this
-   runs once per member and is cached).
-2. Position the member's face in the frame and click **Scan Face & Mark
-   Attendance**.
-3. On a confident match, the member's card appears (with photo), the same
-   active/expiry checks run, and attendance is marked automatically.
+   the app loads the face models, then prepares each member's face data.
+   Face descriptors are normally computed once, at registration/photo-save
+   time, and cached — this step only needs to (re)compute them for members
+   whose descriptor is still missing (e.g. photo added before this feature
+   shipped).
+2. Position the member's face in the frame — a bounding-box overlay shows
+   when a face is detected, and turns red if more than one face is in frame
+   (only a single person can be scanned at a time).
+3. Click **Scan Face & Mark Attendance**. On a confident match, the member's
+   card appears (with photo), the same active/expiry checks run, and
+   attendance is marked automatically.
 4. If no confident match is found, the app reports the closest distance so you
    can retry with better lighting/angle or fall back to phone-number entry.
+5. After a successful match, the scanner enters a short cooldown (a few
+   seconds) so a member lingering in front of the camera doesn't repeatedly
+   retrigger a duplicate scan attempt.
+
+A **Resync Faces** button force-recomputes and re-saves every member's face
+descriptor from their stored photo, overwriting any cached ones — use it after
+a bulk photo re-upload, or after changing the match threshold in Settings.
 
 Notes and limitations:
 - Face matching works only for members who registered **with a clear,
-  front-facing photo**. Members without a photo can only be checked in by phone.
+  front-facing photo**. Members without a detectable face in their photo are
+  flagged with a "⚠ no face detected — retake photo" badge in the Members
+  List, and can only be checked in by phone until the photo is retaken.
+- The match threshold (how strict a face match must be) is configurable from
+  **Settings → Face-Scan Attendance Tuning** and takes effect immediately —
+  no restart required.
 - Recognition runs fully **offline and on-device** (models bundled locally,
   nothing sent to the internet).
 - **Face match is a convenience, not secure identity proof** — a printed photo
@@ -318,7 +342,24 @@ reminders can be sent for pending dues. The **WhatsApp** tab shows history.
   photo) is cached in the `members.faceDescriptor` column so it isn't recomputed
   every scan. Face matching has **no liveness detection** and is not a substitute
   for secure authentication (see the Attendance section).
-- The Electron renderer currently runs with `nodeIntegration: true` and
-  `contextIsolation: false`. This is a pre-existing configuration in this
-  project; hardening it (a preload script + context isolation) would be a
-  separate, app-wide change.
+
+### Renderer security (context isolation)
+
+The Electron renderer runs with `nodeIntegration: false` and
+`contextIsolation: true`. It has no access to Node.js globals (`require`,
+`process`, `Buffer`, `module`) or the raw Electron `ipcRenderer` — the only
+bridge into the main process is the explicit, allow-listed API that
+`preload.js` exposes via `contextBridge.exposeInMainWorld("electron", ...)`.
+Every IPC channel the renderer is allowed to use is named in `preload.js`'s
+channel allow-lists; a channel not on that list is rejected rather than
+silently passed through. This is the standard, currently-recommended Electron
+security posture and replaces an earlier `nodeIntegration: true` /
+`contextIsolation: false` configuration.
+
+> Implementation note: `@vladmandic/face-api`'s bundled TensorFlow.js internals
+> define a class method literally named `import`, which some bundler dev/build
+> transforms can mis-rewrite as a dynamic `import()` call and corrupt. To avoid
+> that, the package's prebuilt browser bundle is vendored as a static asset in
+> `public/vendor/` (kept in sync automatically via the `postinstall` script —
+> see `scripts/sync-face-api-vendor.js`) and loaded at runtime by URL instead of
+> as a normal module import.
