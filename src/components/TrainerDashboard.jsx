@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import useGymStore from "../store/gymStore";
 import { useUI } from "../context/UIContext";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const TrainerDashboard = () => {
   // Consume from centralized store
@@ -56,7 +56,7 @@ const TrainerDashboard = () => {
     if (!trimmedName || !trimmedPhone)
       return showToast("All trainer fields are mandatory!", "error");
 
-    if (!/^[A-Za-z][A-Za-z\s.\-]*$/.test(trimmedName))
+    if (!/^[A-Za-z][A-Za-z\s.-]*$/.test(trimmedName))
       return showToast("Name must contain only letters, spaces, dots or hyphens. Numbers are not allowed.", "error");
 
     if (!/^\d{10}$/.test(trimmedPhone))

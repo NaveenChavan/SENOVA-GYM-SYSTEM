@@ -6,7 +6,7 @@
  * Zero external dependencies.
  */
 
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 /**
  * @param {Object} options

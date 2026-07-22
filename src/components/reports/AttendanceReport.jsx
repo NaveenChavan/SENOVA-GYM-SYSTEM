@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import ReportFilters from "./ReportFilters";
 import ReportExportBar from "./ReportExportBar";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const getLocalDate = (date) => {
   const d = date || new Date();
@@ -37,6 +37,9 @@ const AttendanceReport = () => {
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-attendance-range-response", handleResponse);
     };
+    // Mount-once: register the IPC listener and do the initial fetch. The range
+    // is re-fetched explicitly via handleApply, not by re-running this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFilterChange = (newFilters) => {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
-const windowElectron = window.require ? window.require("electron") : null;
+import { QRCodeSVG } from "qrcode.react";
+const windowElectron = window.electron || null;
 
 const WhatsAppHistory = () => {
   const [qrCode, setQrCode] = useState(null);
@@ -74,10 +75,14 @@ const WhatsAppHistory = () => {
             </div>
           ) : qrCode ? (
             <div className="bg-white p-4 rounded-xl shadow-sm border border-slate-100">
-              <img
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(qrCode)}`}
-                alt="WhatsApp QR Code"
+              {/* Rendered locally (offline) — the WhatsApp pairing token must
+                  never be sent to a third-party QR service. */}
+              <QRCodeSVG
+                value={qrCode}
+                size={208}
+                level="M"
                 className="w-52 h-52 select-none"
+                title="WhatsApp linking QR code"
               />
               <p className="text-[10px] text-slate-400 mt-3 font-medium">
                 Scan code to authorize session

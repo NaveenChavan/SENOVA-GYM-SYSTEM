@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const ReportSummaryCards = () => {
   const [summary, setSummary] = useState(null);

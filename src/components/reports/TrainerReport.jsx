@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import ReportExportBar from "./ReportExportBar";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const TrainerReport = () => {
   const [data, setData] = useState([]);

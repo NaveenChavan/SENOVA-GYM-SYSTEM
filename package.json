@@ -8,9 +8,12 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "oxlint",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "postinstall": "node scripts/sync-face-api-vendor.js",
+    "sync:face-api": "node scripts/sync-face-api-vendor.js"
   },
   "dependencies": {
+    "@vladmandic/face-api": "1.7.15",
     "concurrently": "^10.0.3",
     "electron": "^42.5.0",
     "qrcode.react": "^4.2.0",

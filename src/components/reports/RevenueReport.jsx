@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import ReportFilters from "./ReportFilters";
 import ReportExportBar from "./ReportExportBar";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const RevenueReport = () => {
   const [data, setData] = useState([]);
@@ -29,6 +29,10 @@ const RevenueReport = () => {
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-revenue-summary-response", handleResponse);
     };
+    // Mount-once: registers the IPC listener and does the initial fetch with the
+    // default filters. Re-running on filter changes would re-register duplicate
+    // listeners; subsequent fetches are driven explicitly by handleFilterChange.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFilterChange = (newFilters) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import ReportFilters from "./ReportFilters";
 import ReportExportBar from "./ReportExportBar";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const MemberGrowthReport = () => {
   const [data, setData] = useState([]);
@@ -28,6 +28,9 @@ const MemberGrowthReport = () => {
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-member-growth-response", handleResponse);
     };
+    // Mount-once: register the IPC listener and do the initial fetch. Filter
+    // changes are handled explicitly by handleFilterChange, not by this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFilterChange = (newFilters) => {

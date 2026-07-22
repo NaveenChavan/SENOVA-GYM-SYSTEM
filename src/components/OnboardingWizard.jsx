@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useUI } from "../context/UIContext";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const OnboardingWizard = ({ onWizardComplete }) => {
   const [step, setStep] = useState("GOOGLE_LOGIN");

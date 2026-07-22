@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import ReportFilters from "./ReportFilters";
 import ReportExportBar from "./ReportExportBar";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const ExpiringMembersReport = () => {
   const [data, setData] = useState([]);
@@ -29,6 +29,9 @@ const ExpiringMembersReport = () => {
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-expiring-members-response", handleResponse);
     };
+    // Mount-once: register the IPC listener and do the initial fetch. Day/filter
+    // changes are handled explicitly by handleDaysChange/handleFilterChange.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleDaysChange = (days) => {

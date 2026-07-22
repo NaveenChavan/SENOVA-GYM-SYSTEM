@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 const sqlite3 = require("sqlite3").verbose();
 const { Client, LocalAuth } = require("whatsapp-web.js");
+const cameraServer = require("./src/services/cameraServer");
 
 let whatsappClient,
   mainWindow,
@@ -37,6 +38,7 @@ db.serialize(() => {
   db.run(`ALTER TABLE members ADD COLUMN photo TEXT DEFAULT NULL`, () => {});
   db.run(`ALTER TABLE members ADD COLUMN joinTime TEXT DEFAULT NULL`, () => {});
   db.run(`ALTER TABLE members ADD COLUMN notes TEXT DEFAULT NULL`, () => {});
+  db.run(`ALTER TABLE members ADD COLUMN faceDescriptor TEXT DEFAULT NULL`, () => {});
 
   // Meta & Settings Tables
   db.run(
@@ -127,13 +129,13 @@ function cleanStaleLocks() {
   // Top-level Chromium locks
   const topLocks = ["SingletonLock", "SingletonCookie", "SingletonSocket", "lockfile", "DevToolsActivePort"];
   topLocks.forEach((name) => {
-    try { fs.unlinkSync(path.join(sessionPath, name)); } catch (_) {}
+    try { fs.unlinkSync(path.join(sessionPath, name)); } catch { /* lock file absent — nothing to clean */ }
   });
   // LevelDB LOCK files inside Default/ (recursive)
   const defaultPath = path.join(sessionPath, "Default");
   try {
     removeLockFilesRecursive(defaultPath);
-  } catch (_) {}
+  } catch { /* Default/ may not exist yet on first run */ }
 }
 
 function removeLockFilesRecursive(dir) {
@@ -144,7 +146,7 @@ function removeLockFilesRecursive(dir) {
     if (entry.isDirectory()) {
       removeLockFilesRecursive(fullPath);
     } else if (entry.name === "LOCK") {
-      try { fs.unlinkSync(fullPath); } catch (_) {}
+      try { fs.unlinkSync(fullPath); } catch { /* file may be held or already gone */ }
     }
   }
 }
@@ -314,9 +316,19 @@ app.whenReady().then(() => {
     height: 800,
     minWidth: 1020,
     minHeight: 700,
-    webPreferences: { nodeIntegration: true, contextIsolation: false },
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, "preload.js"),
+    },
   });
-  mainWindow.loadURL("http://localhost:5173");
+  // In development the renderer is served by the Vite dev server; a packaged
+  // build has no dev server, so load the bundled files from dist/ instead.
+  if (app.isPackaged) {
+    mainWindow.loadFile(path.join(__dirname, "dist", "index.html"));
+  } else {
+    mainWindow.loadURL("http://localhost:5173");
+  }
 
   mainWindow.webContents.on("did-finish-load", async () => {
     console.log("[Startup] BrowserWindow fully loaded.");
@@ -339,6 +351,64 @@ ipcMain.on("request-whatsapp-status", (event) => {
 ipcMain.on("get-members", (event) => broadcastMembersList(event));
 ipcMain.on("get-trainers", (event) => broadcastTrainersAndMembers(event));
 
+// MOBILE CAMERA CAPTURE
+ipcMain.handle("start-camera-session", async (_event, options = {}) => {
+  try {
+    const session = await cameraServer.startSession({
+      ip: typeof options.ip === "string" ? options.ip : undefined,
+    });
+    return { success: true, ...session };
+  } catch (error) {
+    return { success: false, error: error.message || "Could not start the camera capture server." };
+  }
+});
+
+ipcMain.handle("stop-camera-session", async (_event, sessionId) => {
+  try {
+    if (typeof sessionId === "string") await cameraServer.stopSession(sessionId);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error.message || "Could not stop the camera session." };
+  }
+});
+
+cameraServer.events.on("photo-received", (payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("photo-received", payload);
+  }
+});
+
+cameraServer.events.on("session-expired", (payload) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("camera-session-expired", payload);
+  }
+});
+
+cameraServer.events.on("server-error", (error) => {
+  console.error("[CameraServer] HTTP server error:", error);
+});
+
+// FACE RECOGNITION — persist a member's computed face descriptor (128-d JSON).
+// Used to backfill/cache descriptors so attendance face-matching does not have
+// to recompute from the stored photo on every scan. Does not touch photo/save.
+ipcMain.on("save-face-descriptor", (event, payload) => {
+  const { id, descriptor } = payload || {};
+  if (!id || !Array.isArray(descriptor) || descriptor.length !== 128) {
+    return event.reply("save-face-descriptor-response", { success: false, error: "Invalid descriptor payload." });
+  }
+  db.run(
+    `UPDATE members SET faceDescriptor = ? WHERE id = ?`,
+    [JSON.stringify(descriptor), id],
+    function (err) {
+      if (err) {
+        event.reply("save-face-descriptor-response", { success: false, error: err.message });
+      } else {
+        event.reply("save-face-descriptor-response", { success: true, id });
+      }
+    },
+  );
+});
+
 // CREATE MEMBER (Includes Photo injection)
 ipcMain.on("add-member", (event, memberData) => {
   const {
@@ -355,6 +425,7 @@ ipcMain.on("add-member", (event, memberData) => {
     expiryDate,
     assignedTrainerId,
     photo,
+    faceDescriptor,
   } = memberData;
 
   // Prevent duplicate mobile numbers before database insert
@@ -366,7 +437,16 @@ ipcMain.on("add-member", (event, memberData) => {
       return event.reply("add-member-response", { success: false, error: "A member with this mobile number already exists." });
     }
 
-    const query = `INSERT INTO members (name, phone, age, sex, plan, paymentMode, amountPaid, amountPending, joinDate, joinTime, expiryDate, assignedTrainerId, photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    // faceDescriptor arrives pre-computed by the renderer at photo-save time
+    // (computeDescriptorFromDataUrl in MembersPage) — a 128-length number[] or
+    // null when no face was detectable in the registered photo. Stored as
+    // JSON text, same shape as the "save-face-descriptor" backfill path.
+    const descriptorJson =
+      Array.isArray(faceDescriptor) && faceDescriptor.length === 128
+        ? JSON.stringify(faceDescriptor)
+        : null;
+
+    const query = `INSERT INTO members (name, phone, age, sex, plan, paymentMode, amountPaid, amountPending, joinDate, joinTime, expiryDate, assignedTrainerId, photo, faceDescriptor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     db.run(
       query,
       [
@@ -383,6 +463,7 @@ ipcMain.on("add-member", (event, memberData) => {
         expiryDate,
         assignedTrainerId || "None",
         photo || null,
+        descriptorJson,
       ],
       function (err) {
         if (err) {
@@ -413,6 +494,9 @@ ipcMain.on("update-member", (event, payload) => {
     assignedTrainerId,
     joinDate,
     joinTime,
+    photo,
+    photoChanged,
+    faceDescriptor,
   } = payload;
 
   // Prevent duplicate phone on edit (exclude current member)
@@ -424,34 +508,53 @@ ipcMain.on("update-member", (event, payload) => {
       return event.reply("update-member-response", { success: false, error: "Another member with this mobile number already exists." });
     }
 
-    const query = `UPDATE members SET name=?, phone=?, age=?, sex=?, plan=?, paymentMode=?, amountPaid=?, amountPending=?, status=?, assignedTrainerId=?, joinDate=COALESCE(?, joinDate), joinTime=COALESCE(?, joinTime) WHERE id=?`;
-    db.run(
-      query,
-      [
-        name,
-        phone,
-        age,
-        sex,
-        plan,
-        paymentMode,
-        Number(amountPaid),
-        Number(amountPending),
-        status,
-        assignedTrainerId || "None",
-        joinDate || null,
-        joinTime || null,
-        id,
-      ],
-      function (err) {
-        if (err) {
-          event.reply("update-member-response", { success: false, error: err.message });
-        } else {
-          event.reply("update-member-response", { success: true });
-          broadcastMembersList();
-          broadcastTrainersAndMembers();
-        }
-      },
-    );
+    // Only touch photo/faceDescriptor columns when the caller explicitly
+    // changed the photo (photoChanged: true) — most update-member calls (edit
+    // details, freeze/unfreeze) don't include a photo at all and must leave
+    // the existing photo/descriptor untouched.
+    //
+    // When the photo DID change: store the new photo, and either the
+    // pre-computed descriptor (faceDescriptor, computed by the renderer at
+    // save time — a 128-length number[] or null when no face was detected)
+    // or NULL if none was supplied, so a stale descriptor from the OLD photo
+    // never lingers against the new one (Hardening 6: descriptor invalidation
+    // on photo change).
+    const touchesPhoto = photoChanged === true;
+    const descriptorJson =
+      touchesPhoto && Array.isArray(faceDescriptor) && faceDescriptor.length === 128
+        ? JSON.stringify(faceDescriptor)
+        : null;
+
+    const query = touchesPhoto
+      ? `UPDATE members SET name=?, phone=?, age=?, sex=?, plan=?, paymentMode=?, amountPaid=?, amountPending=?, status=?, assignedTrainerId=?, joinDate=COALESCE(?, joinDate), joinTime=COALESCE(?, joinTime), photo=?, faceDescriptor=? WHERE id=?`
+      : `UPDATE members SET name=?, phone=?, age=?, sex=?, plan=?, paymentMode=?, amountPaid=?, amountPending=?, status=?, assignedTrainerId=?, joinDate=COALESCE(?, joinDate), joinTime=COALESCE(?, joinTime) WHERE id=?`;
+
+    const params = [
+      name,
+      phone,
+      age,
+      sex,
+      plan,
+      paymentMode,
+      Number(amountPaid),
+      Number(amountPending),
+      status,
+      assignedTrainerId || "None",
+      joinDate || null,
+      joinTime || null,
+    ];
+    if (touchesPhoto) params.push(photo || null, descriptorJson);
+    params.push(id);
+
+    db.run(query, params, function (err) {
+      if (err) {
+        event.reply("update-member-response", { success: false, error: err.message });
+      } else {
+        event.reply("update-member-response", { success: true });
+        broadcastMembersList();
+        broadcastTrainersAndMembers();
+      }
+    });
   });
 });
 
@@ -600,21 +703,34 @@ ipcMain.on("save-settings", (event, settingsData) => {
   const stmt = db.prepare(
     `INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)`,
   );
+  let stmtError = null;
   Object.keys(settingsData).forEach((key) =>
-    stmt.run(key, JSON.stringify(settingsData[key])),
+    stmt.run(key, JSON.stringify(settingsData[key]), (err) => {
+      if (err && !stmtError) stmtError = err;
+    }),
   );
-  stmt.finalize(() => event.reply("save-settings-response", { success: true }));
+  stmt.finalize((finalizeErr) => {
+    const err = stmtError || finalizeErr;
+    if (err) event.reply("save-settings-response", { success: false, error: err.message });
+    else event.reply("save-settings-response", { success: true });
+  });
 });
 
 ipcMain.on("get-settings", (event) => {
   db.all(`SELECT * FROM settings`, [], (err, rows) => {
-    if (!err) {
-      const config = {};
-      rows.forEach((row) => {
-        config[row.key] = JSON.parse(row.value);
-      });
-      event.reply("get-settings-response", { success: true, data: config });
+    if (err) {
+      return event.reply("get-settings-response", { success: false, error: err.message });
     }
+    const config = {};
+    rows.forEach((row) => {
+      // A malformed/corrupt value must not crash the whole settings load.
+      try {
+        config[row.key] = JSON.parse(row.value);
+      } catch {
+        config[row.key] = row.value;
+      }
+    });
+    event.reply("get-settings-response", { success: true, data: config });
   });
 });
 
@@ -914,6 +1030,7 @@ ipcMain.on("export-report-csv", async (event, payload) => {
 });
 
 app.on("window-all-closed", () => {
+  void cameraServer.stopAllSessions();
   if (whatsappClient) {
     whatsappClient.destroy().catch(() => {});
     whatsappClient = null;

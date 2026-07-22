@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import ReportFilters from "./ReportFilters";
 import ReportExportBar from "./ReportExportBar";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const PendingPaymentsReport = () => {
   const [data, setData] = useState([]);
@@ -29,6 +29,9 @@ const PendingPaymentsReport = () => {
     return () => {
       windowElectron.ipcRenderer.removeListener("get-report-pending-payments-response", handleResponse);
     };
+    // Mount-once: register the IPC listener and do the initial fetch. Filter
+    // changes are handled explicitly by handleFilterChange, not by this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleFilterChange = (newFilters) => {

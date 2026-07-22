@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { printReport } from "../../utils/printReport";
 import { exportPdf } from "../../utils/exportPdf";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 /**
  * ReportExportBar — Reusable export toolbar for all reports.
@@ -32,7 +32,7 @@ const ReportExportBar = ({
   const handleCsvExport = () => {
     if (!windowElectron || disabled || rows.length === 0) return;
     setExporting("csv");
-    const handleResponse = (_e, arg) => {
+    const handleResponse = () => {
       windowElectron.ipcRenderer.removeListener("export-report-csv-response", handleResponse);
       setExporting(null);
     };

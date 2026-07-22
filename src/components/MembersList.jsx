@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import useGymStore from "../store/gymStore";
 import { useUI } from "../context/UIContext";
-const windowElectron = window.require ? window.require("electron") : null;
+import CameraCapture from "./CameraCapture";
+const windowElectron = window.electron || null;
 
 const getLocalDate = (date) => {
   const d = date || new Date();
@@ -27,6 +28,12 @@ const MembersList = () => {
   const [menuOpenId, setMenuOpenId] = useState(null);
   const menuBtnRefs = useRef({});
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0, openUp: false });
+
+  // Retake-photo flow while editing: photoChanged flags update-member to also
+  // touch the photo/faceDescriptor columns (see main.js update-member — most
+  // edits don't include a photo and must leave the existing one untouched).
+  const [isEditCaptureOpen, setIsEditCaptureOpen] = useState(false);
+  const [editFaceDescriptorState, setEditFaceDescriptorState] = useState("idle"); // idle|computing|ready|no-face|error
 
   const MENU_HEIGHT = 180; // approximate max dropdown height in px
 
@@ -120,7 +127,7 @@ const MembersList = () => {
       windowElectron.ipcRenderer.removeListener("delete-member-response", handleDeleteResponse);
       windowElectron.ipcRenderer.removeListener("renew-member-response", handleRenewResponse);
     };
-  }, [refreshAll]);
+  }, [refreshAll, showToast]);
 
   const getTrainerBadge = (id) => {
     if (!id || id === "None")
@@ -190,6 +197,40 @@ const MembersList = () => {
       ...member,
       assignedTrainerId: member.assignedTrainerId || "None",
     });
+    setEditFaceDescriptorState("idle");
+  };
+
+  // Hardening 6 + DEFECT 2: recompute the descriptor immediately when a
+  // member's photo is retaken during edit, instead of leaving the stale
+  // descriptor (from the old photo) to linger until a later Face Scan
+  // backfill. Mirrors MembersPage.computePhotoDescriptor. No Node-globals
+  // hiding needed — the renderer runs with nodeIntegration: false (see
+  // main.js + preload.js), so face-api/TF.js's environment auto-detection
+  // correctly resolves to "browser" on its own.
+  const computeEditPhotoDescriptor = async (dataUrl) => {
+    setEditFaceDescriptorState("computing");
+    try {
+      const lib = await import("../services/faceRecognition");
+      await lib.loadModels();
+      await lib.warmup();
+      const descriptor = await lib.computeDescriptorFromDataUrl(dataUrl);
+      if (descriptor) {
+        setEditForm((prev) => ({ ...prev, _newFaceDescriptor: lib.descriptorToArray(descriptor) }));
+        setEditFaceDescriptorState("ready");
+      } else {
+        setEditForm((prev) => ({ ...prev, _newFaceDescriptor: null }));
+        setEditFaceDescriptorState("no-face");
+      }
+    } catch (error) {
+      console.error("[MembersList] Failed to compute face descriptor on photo retake:", error);
+      setEditForm((prev) => ({ ...prev, _newFaceDescriptor: null }));
+      setEditFaceDescriptorState("error");
+    }
+  };
+
+  const handleEditPhotoCapture = (base64Photo) => {
+    setEditForm((prev) => ({ ...prev, photo: base64Photo, _photoChanged: true }));
+    computeEditPhotoDescriptor(base64Photo);
   };
 
   const handleSaveEdit = () => {
@@ -199,7 +240,7 @@ const MembersList = () => {
     if (!trimmedName || !trimmedPhone)
       return showToast("Name and Mobile Number cannot be empty.", "error");
 
-    if (!/^[A-Za-z][A-Za-z\s.\-]*$/.test(trimmedName))
+    if (!/^[A-Za-z][A-Za-z\s.-]*$/.test(trimmedName))
       return showToast("Name must contain only letters, spaces, dots or hyphens. Numbers are not allowed.", "error");
 
     if (!/^\d{10}$/.test(trimmedPhone))
@@ -220,6 +261,9 @@ const MembersList = () => {
         assignedTrainerId: editForm.assignedTrainerId || "None",
         joinDate: editForm.joinDate || null,
         joinTime: editForm.joinTime || null,
+        photo: editForm._photoChanged ? editForm.photo : undefined,
+        photoChanged: editForm._photoChanged === true,
+        faceDescriptor: editFaceDescriptorState === "ready" ? editForm._newFaceDescriptor : null,
       });
     }
   };
@@ -438,6 +482,30 @@ const MembersList = () => {
                           placeholder="₹ Pending"
                         />
                       </div>
+                      <div className="flex items-center gap-3 mb-3">
+                        <button
+                          type="button"
+                          onClick={() => setIsEditCaptureOpen(true)}
+                          className="bg-slate-900 text-white text-[11px] font-bold px-3 py-2 rounded-lg hover:bg-slate-800 transition-all"
+                        >
+                          📷 Retake Photo
+                        </button>
+                        {editFaceDescriptorState === "computing" && (
+                          <span className="text-[11px] font-bold text-blue-500 flex items-center gap-1">
+                            <span className="animate-pulse">🧠</span> Analyzing new photo…
+                          </span>
+                        )}
+                        {editFaceDescriptorState === "no-face" && (
+                          <span className="text-[11px] font-bold text-amber-600">
+                            ⚠ No face detected in the new photo — retake with a clear, front-facing shot.
+                          </span>
+                        )}
+                        {editFaceDescriptorState === "ready" && (
+                          <span className="text-[11px] font-bold text-emerald-600">
+                            ✓ New face data captured.
+                          </span>
+                        )}
+                      </div>
                       <div className="flex justify-end gap-2 font-bold">
                         <button
                           onClick={() => setEditingId(null)}
@@ -473,6 +541,14 @@ const MembersList = () => {
                           <p className="text-[11px] text-slate-400 font-bold font-mono tracking-wide mt-0.5">
                             {member.phone}
                           </p>
+                          {member.photo && !member.faceDescriptor && (
+                            <span
+                              title="No face was detected in this member's registered photo — face-scan attendance won't recognize them until the photo is retaken with a clear, front-facing shot."
+                              className="inline-block mt-1 text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-100 tracking-tight"
+                            >
+                              ⚠ No face detected — retake photo
+                            </span>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -806,6 +882,15 @@ const MembersList = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {isEditCaptureOpen && (
+        <CameraCapture
+          onCapture={(base64Photo) => {
+            handleEditPhotoCapture(base64Photo);
+          }}
+          onClose={() => setIsEditCaptureOpen(false)}
+        />
       )}
     </div>
   );

@@ -85,6 +85,7 @@ export const UIProvider = ({ children }) => {
  *   showToast("Success!", "success");
  *   const confirmed = await showConfirm("Delete this?");
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export const useUI = () => {
   const ctx = useContext(UIContext);
   if (!ctx) throw new Error("useUI must be used within UIProvider");

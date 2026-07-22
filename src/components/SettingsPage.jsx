@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import useGymStore from "../store/gymStore";
 import { useUI } from "../context/UIContext";
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 const SettingsPage = () => {
   // Consume from centralized store
@@ -15,6 +15,7 @@ const SettingsPage = () => {
     trainerName: "",
     gymPlans: ["Monthly", "3 Months", "6 Months", "1 Year"],
     personalPlans: ["PT Monthly - ₹5000", "PT 3 Months - ₹12000"],
+    faceMatchThreshold: 0.5,
   });
 
   const [newPlan, setNewPlan] = useState("");
@@ -27,6 +28,9 @@ const SettingsPage = () => {
         ...settings,
         gymPlans: settings.gymPlans || ["Monthly", "3 Months", "6 Months", "1 Year"],
         personalPlans: settings.personalPlans || ["PT Monthly - ₹5000", "PT 3 Months - ₹12000"],
+        faceMatchThreshold: Number.isFinite(Number(settings.faceMatchThreshold)) && Number(settings.faceMatchThreshold) > 0
+          ? Number(settings.faceMatchThreshold)
+          : 0.5,
       });
     }
   }, [settings]);
@@ -238,6 +242,34 @@ const SettingsPage = () => {
         >
           Save Configuration & Initialize Platform
         </button>
+      </div>
+
+      <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-sm space-y-4 max-w-4xl">
+        <h4 className="text-xs font-black text-blue-600 uppercase tracking-widest flex items-center gap-1">
+          <span>🙂</span> Face-Scan Attendance Tuning
+        </h4>
+        <div>
+          <label className="text-xs text-slate-500 block mb-1.5 font-bold">
+            Match Threshold ({gymConfig.faceMatchThreshold?.toFixed(2) ?? "0.50"})
+          </label>
+          <input
+            type="range"
+            min="0.30"
+            max="0.70"
+            step="0.01"
+            value={gymConfig.faceMatchThreshold ?? 0.5}
+            onChange={(e) =>
+              setGymConfig({ ...gymConfig, faceMatchThreshold: Number(e.target.value) })
+            }
+            className="w-full"
+          />
+          <p className="text-[11px] text-slate-400 font-semibold mt-1.5">
+            Lower = stricter match (fewer false accepts, more false rejects).
+            Higher = looser match. Default is 0.50; the new value applies the
+            next time Face Scan mode is opened (existing sessions keep using
+            the threshold they started with — no restart of the app required).
+          </p>
+        </div>
       </div>
     </div>
   );

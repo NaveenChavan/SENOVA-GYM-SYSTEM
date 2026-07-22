@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-const windowElectron = window.require ? window.require("electron") : null;
+const windowElectron = window.electron || null;
 
 /**
  * Centralized Zustand Store for Senova Gym System

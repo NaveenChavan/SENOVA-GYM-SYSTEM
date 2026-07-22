@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import useGymStore from "../store/gymStore";
 import { useUI } from "../context/UIContext";
-const windowElectron = window.require ? window.require("electron") : null;
+import CameraCapture from "./CameraCapture";
+const windowElectron = window.electron || null;
 
 const getLocalDate = (date) => {
   const d = date || new Date();
@@ -15,10 +16,10 @@ const MembersPage = () => {
   const refreshAll = useGymStore((state) => state.refreshAll);
   const { showToast } = useUI();
 
-  const gymConfig = {
+  const gymConfig = useMemo(() => ({
     gymName: settings.gymName || "MF FITNESS CLUB",
     gymPlans: settings.gymPlans || ["Monthly", "3 Months", "6 Months", "1 Year"],
-  };
+  }), [settings]);
   const trainersList = trainers;
 
   const [formData, setFormData] = useState({
@@ -34,6 +35,14 @@ const MembersPage = () => {
     joinDate: getLocalDate(),
     photo: null,
   });
+
+  // DEFECT 2 fix: the face descriptor is computed as soon as a photo is
+  // captured (not lazily, the first time Face Scan mode is opened), so it can
+  // ride along in the add-member payload and be persisted immediately.
+  // `faceDescriptorState` distinguishes "still computing" from "computed to
+  // null because no face was detectable" so MembersList can flag the latter.
+  const [faceDescriptor, setFaceDescriptor] = useState(null);
+  const [faceDescriptorState, setFaceDescriptorState] = useState("idle"); // idle|computing|ready|no-face|error
 
   // Refs prevent the useEffect from rebinding and crashing the IPC thread
   const formDataRef = useRef(formData);
@@ -61,12 +70,9 @@ const MembersPage = () => {
         return prev;
       });
     }
-  }, [settings]);
+  }, [gymConfig]);
 
-  // CAMERA STATES
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [isCaptureOpen, setIsCaptureOpen] = useState(false);
 
   // 🚨 FREEZE FIX: Empty dependency array means this listener mounts EXACTLY ONCE
   useEffect(() => {
@@ -115,6 +121,8 @@ const MembersPage = () => {
           joinDate: getLocalDate(),
           photo: null,
         });
+        setFaceDescriptor(null);
+        setFaceDescriptorState("idle");
 
         // Refresh centralized store so all pages update
         refreshAll();
@@ -139,6 +147,32 @@ const MembersPage = () => {
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
 
+  // DEFECT 2 fix: compute the descriptor right after a photo is captured,
+  // instead of waiting for Face Scan mode to lazily backfill it later. No
+  // Node-globals hiding needed here — the renderer now runs with
+  // nodeIntegration: false (see main.js + preload.js), so face-api/TF.js's
+  // own environment auto-detection correctly resolves to "browser" already.
+  const computePhotoDescriptor = async (dataUrl) => {
+    setFaceDescriptorState("computing");
+    try {
+      const lib = await import("../services/faceRecognition");
+      await lib.loadModels();
+      await lib.warmup();
+      const descriptor = await lib.computeDescriptorFromDataUrl(dataUrl);
+      if (descriptor) {
+        setFaceDescriptor(lib.descriptorToArray(descriptor));
+        setFaceDescriptorState("ready");
+      } else {
+        setFaceDescriptor(null);
+        setFaceDescriptorState("no-face");
+      }
+    } catch (error) {
+      console.error("[MembersPage] Failed to compute face descriptor at save time:", error);
+      setFaceDescriptor(null);
+      setFaceDescriptorState("error");
+    }
+  };
+
   const handleSave = () => {
     const trimmedName = formData.name.trim();
     const trimmedPhone = formData.phone.trim().replace(/^\+91/, "");
@@ -149,7 +183,7 @@ const MembersPage = () => {
         "error",
       );
 
-    if (!/^[A-Za-z][A-Za-z\s.\-]*$/.test(trimmedName))
+    if (!/^[A-Za-z][A-Za-z\s.-]*$/.test(trimmedName))
       return showToast(
         "Name must contain only letters, spaces, dots or hyphens. Numbers are not allowed.",
         "error",
@@ -183,47 +217,9 @@ const MembersPage = () => {
       joinDate: formData.joinDate || getLocalDate(),
       joinTime: joinTime,
       expiryDate: getLocalDate(expiry),
+      faceDescriptor: faceDescriptorState === "ready" ? faceDescriptor : null,
     };
     if (windowElectron) windowElectron.ipcRenderer.send("add-member", payload);
-  };
-
-  // CAMERA CONTROLLERS
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        setIsCameraOpen(true);
-      }
-    } catch (err) {
-      showToast(
-        "External Dashcam or Webcam not detected. Please connect USB device.",
-        "error",
-      );
-    }
-  };
-
-  const capturePhoto = () => {
-    if (canvasRef.current && videoRef.current) {
-      const context = canvasRef.current.getContext("2d");
-      context.drawImage(videoRef.current, 0, 0, 300, 300);
-      const photoData = canvasRef.current.toDataURL("image/jpeg", 0.8);
-      setFormData((prev) => ({ ...prev, photo: photoData }));
-      stopCamera();
-    }
-  };
-
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = videoRef.current.srcObject.getTracks();
-      tracks.forEach((track) => track.stop());
-    }
-    setIsCameraOpen(false);
-  };
-
-  const retakePhoto = () => {
-    setFormData((prev) => ({ ...prev, photo: null }));
-    startCamera();
   };
 
   return (
@@ -429,20 +425,13 @@ const MembersPage = () => {
               <span>🛂</span> BIOMETRIC & IDENTITY HUB
             </h3>
 
-            {/* LIVE WEBCAM MODULE */}
+            {/* MEMBER PHOTO */}
             <div className="w-full aspect-square bg-slate-50 border border-slate-200/60 rounded-2xl flex flex-col items-center justify-center text-center p-3 relative overflow-hidden">
               {formData.photo ? (
                 <img
                   src={formData.photo}
                   alt="Captured Profile"
                   className="w-full h-full object-cover rounded-xl shadow-sm"
-                />
-              ) : isCameraOpen ? (
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  className="w-full h-full object-cover rounded-xl transform scale-x-[-1]"
                 />
               ) : (
                 <div className="w-32 h-32 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center relative mb-3">
@@ -452,42 +441,33 @@ const MembersPage = () => {
                 </div>
               )}
 
-              {/* Optional Camera Controls Overlay */}
               <div className="absolute bottom-4 left-0 right-0 flex justify-center px-4">
-                {!isCameraOpen && !formData.photo && (
-                  <button
-                    onClick={startCamera}
-                    className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold px-4 py-2 rounded-lg shadow-md transition-all"
-                  >
-                    📷 Connect Dashcam
-                  </button>
-                )}
-                {isCameraOpen && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={capturePhoto}
-                      className="bg-emerald-500 hover:bg-emerald-600 text-white text-[11px] font-bold px-4 py-2 rounded-lg shadow-md transition-all"
-                    >
-                      📸 Capture Face
-                    </button>
-                    <button
-                      onClick={stopCamera}
-                      className="bg-rose-500 hover:bg-rose-600 text-white text-[11px] font-bold px-4 py-2 rounded-lg shadow-md transition-all"
-                    >
-                      ✖ Cancel
-                    </button>
-                  </div>
-                )}
-                {formData.photo && (
-                  <button
-                    onClick={retakePhoto}
-                    className="bg-slate-700 hover:bg-slate-800 text-white text-[11px] font-bold px-4 py-2 rounded-lg shadow-md transition-all"
-                  >
-                    🔄 Retake Photo
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={() => setIsCaptureOpen(true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold px-4 py-2 rounded-lg shadow-md transition-all"
+                >
+                  {formData.photo ? "🔄 Retake Photo" : "📷 Click Photo"}
+                </button>
               </div>
             </div>
+
+            {faceDescriptorState === "computing" && (
+              <p className="text-[10px] font-bold text-blue-500 flex items-center gap-1">
+                <span className="animate-pulse">🧠</span> Analyzing face for attendance matching…
+              </p>
+            )}
+            {faceDescriptorState === "no-face" && (
+              <p className="text-[10px] font-bold text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
+                ⚠ No face detected in this photo — face-scan attendance won't work for
+                this member unless retaken with a clear, front-facing photo.
+              </p>
+            )}
+            {faceDescriptorState === "ready" && (
+              <p className="text-[10px] font-bold text-emerald-600">
+                ✓ Face data captured — ready for face-scan attendance.
+              </p>
+            )}
 
             {/* Thumb Scanner Readiness Placeholder */}
             <div className="flex justify-between items-center bg-emerald-50 border border-emerald-100 p-3 rounded-xl mt-2">
@@ -508,13 +488,15 @@ const MembersPage = () => {
         </div>
       </div>
 
-      {/* Hidden Canvas for Image Processing */}
-      <canvas
-        ref={canvasRef}
-        width="300"
-        height="300"
-        className="hidden"
-      ></canvas>
+      {isCaptureOpen && (
+        <CameraCapture
+          onCapture={(base64Photo) => {
+            setFormData((prev) => ({ ...prev, photo: base64Photo }));
+            computePhotoDescriptor(base64Photo);
+          }}
+          onClose={() => setIsCaptureOpen(false)}
+        />
+      )}
     </div>
   );
 };
