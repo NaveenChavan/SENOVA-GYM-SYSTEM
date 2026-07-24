@@ -127,29 +127,44 @@ function assertAllowed(set, channel, method) {
   }
 }
 
-// Tracks per-channel (original listener -> wrapped listener) so
-// removeListener(channel, originalListener) can find and remove the exact
-// wrapper `on` registered, scoped per channel so the same function reference
-// used as a listener on two different channels can't collide. Listener
-// functions are used as real Map keys (by reference), not stringified, so
-// two structurally-identical-but-distinct closures are never confused.
-const listenersByChannel = new Map();
+// Tracks, per channel, the single wrapped listener currently registered on
+// the real Electron ipcRenderer (original listener -> wrapped listener).
+//
+// ROOT CAUSE OF THE DUPLICATE/FLICKERING TOAST BUG (multiple rounds): the
+// original code kept a *separate* wrapped listener per distinct listener
+// function reference, so if on(channel, listener) was ever called again
+// with a NEW closure for a channel that already had a live listener — e.g.
+// a component's effect re-registers with a freshly created handler function
+// before its previous mount's cleanup has actually run (React StrictMode's
+// double-invoke, or two overlapping mount instances of the same page for
+// any other reason) — both listeners stayed alive simultaneously. Every
+// component in this codebase owns its response channels exclusively (grep
+// confirms e.g. "update-member-response" is only ever listened to from
+// MembersList.jsx), so there is never a legitimate reason for two DIFFERENT
+// listener functions to be live on the same channel at once. Enforcing "at
+// most one real ipcRenderer listener per channel, full stop" — regardless of
+// whether the new listener function is the same reference as the old one —
+// closes this bug class structurally, independent of component lifecycle
+// timing, instead of relying on cleanup always running before the next
+// registration.
+const listenerByChannel = new Map(); // channel -> { original, wrapped }
 
 function rememberWrapped(channel, listener, wrapped) {
-  let forChannel = listenersByChannel.get(channel);
-  if (!forChannel) {
-    forChannel = new Map();
-    listenersByChannel.set(channel, forChannel);
+  const existing = listenerByChannel.get(channel);
+  if (existing) {
+    // Some listener (same or different closure) is already registered on
+    // this channel — detach it before installing the new one, so there is
+    // never more than one real listener alive on a given channel.
+    ipcRenderer.removeListener(channel, existing.wrapped);
   }
-  forChannel.set(listener, wrapped);
+  listenerByChannel.set(channel, { original: listener, wrapped });
 }
 
 function takeWrapped(channel, listener) {
-  const forChannel = listenersByChannel.get(channel);
-  if (!forChannel) return undefined;
-  const wrapped = forChannel.get(listener);
-  if (wrapped) forChannel.delete(listener);
-  return wrapped;
+  const existing = listenerByChannel.get(channel);
+  if (!existing || existing.original !== listener) return undefined;
+  listenerByChannel.delete(channel);
+  return existing.wrapped;
 }
 
 contextBridge.exposeInMainWorld("electron", {

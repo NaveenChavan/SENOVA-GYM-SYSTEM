@@ -49,6 +49,21 @@ const MembersPage = () => {
   const gymConfigRef = useRef(gymConfig);
   const showToastRef = useRef(showToast);
 
+  // BUG 1 FIX: correlates each "add-member" send with its response so that
+  // handleAddResponse can only ever act once per submitted request — even if
+  // the IPC listener were ever registered more than once (React StrictMode's
+  // dev-only double-invoke of effects, Vite Fast Refresh re-running this
+  // module, or any future regression that re-adds the listener without
+  // removing the old one first). Without this guard, N live listeners on the
+  // "add-member-response" channel would each independently call showToast(),
+  // dispatch send-whatsapp-bill, and reset the form — producing exactly the
+  // "toast fires N times" symptom. `main.js` only ever sends one reply per
+  // "add-member" send, so gating on "is this response for the request I'm
+  // currently waiting on, and have I already consumed it" makes the handler
+  // idempotent regardless of how many times it is (mis)registered.
+  const pendingRequestIdRef = useRef(null);
+  const requestIdCounterRef = useRef(0);
+
   useEffect(() => {
     formDataRef.current = formData;
   }, [formData]);
@@ -77,6 +92,15 @@ const MembersPage = () => {
   // 🚨 FREEZE FIX: Empty dependency array means this listener mounts EXACTLY ONCE
   useEffect(() => {
     const handleAddResponse = (event, arg) => {
+      // BUG 1 FIX: ignore this response unless it corresponds to the request
+      // we are currently waiting on, and consume (null out) the pending ID
+      // immediately so a second delivery of the same logical response —
+      // whether from a genuinely duplicate listener or a duplicate IPC
+      // event — can only ever be acted on once.
+      const requestId = pendingRequestIdRef.current;
+      if (requestId === null) return;
+      pendingRequestIdRef.current = null;
+
       if (arg.success) {
         showToastRef.current("Member profile locked and trainer queue updated!", "success");
 
@@ -174,6 +198,14 @@ const MembersPage = () => {
   };
 
   const handleSave = () => {
+    // BUG 1 FIX: block a second submit while one is already in-flight — a
+    // fast double-click/double-Enter would otherwise send two "add-member"
+    // IPC messages, and (since main.js correctly replies once per send)
+    // produce two genuinely distinct, legitimate responses — each with its
+    // own toast. This is not the same defect as a duplicated listener, but
+    // it is the same user-visible symptom, so it is closed here too.
+    if (pendingRequestIdRef.current !== null) return;
+
     const trimmedName = formData.name.trim();
     const trimmedPhone = formData.phone.trim().replace(/^\+91/, "");
 
@@ -219,7 +251,10 @@ const MembersPage = () => {
       expiryDate: getLocalDate(expiry),
       faceDescriptor: faceDescriptorState === "ready" ? faceDescriptor : null,
     };
-    if (windowElectron) windowElectron.ipcRenderer.send("add-member", payload);
+    if (windowElectron) {
+      pendingRequestIdRef.current = ++requestIdCounterRef.current;
+      windowElectron.ipcRenderer.send("add-member", payload);
+    }
   };
 
   return (

@@ -27,6 +27,11 @@
 | Sprint 3A.1 | Scanner UX Hotfix | ✅ Completed | July 2026 |
 | Sprint 3B | Attendance History | ✅ Completed | July 2026 |
 | Hotfix | IST Date Bug Fix | ✅ Completed | July 2026 |
+| Sprint 4 | Membership & Billing (Renewal, Inline Edit, Freeze/Unfreeze) | ✅ Completed | July 2026 |
+| Sprint 5A | Reports Module | ✅ Completed | July 2026 |
+| Sprint 5B | Advanced Reports (PDF/CSV export, summary cards) | ✅ Completed | July 2026 |
+| Sprint 6A | Camera Capture (USB + Mobile QR) & Face-Scan Attendance | ✅ Completed | July 2026 |
+| Sprint 6B | Post-6A Regression Fixes (duplicate toasts, missing profile photo) & Members Directory UX | ✅ Completed | July 2026 |
 
 ---
 
@@ -34,8 +39,9 @@
 
 ### Member Management
 
-- Add member with photo capture
-- Edit member (inline)
+- Add member with photo capture (USB webcam or Mobile QR handoff)
+- Edit member (inline), reachable from the "⋮" menu or directly from the profile view
+- Click name/photo in Members Directory to open the full profile
 - Delete member (with confirmation)
 - Search by name or phone
 - Filter by pending dues
@@ -44,6 +50,9 @@
 - Auto expiry calculation
 - Duplicate phone prevention
 - Name + phone validation
+- Membership renewal (extends from current expiry if active, from start date if expired)
+- Profile photo displayed in Members Directory list and profile view
+- Face descriptor computed and cached automatically on photo save (for face-scan attendance)
 - WhatsApp welcome bill on registration
 
 ### Trainer Management
@@ -59,19 +68,30 @@
 ### Attendance
 
 - Phone-based scanner check-in
+- Face-scan check-in (offline, on-device face matching against registered photos)
+- Configurable face-match threshold (Settings → Face-Scan Attendance Tuning)
+- Live face-guide overlay + multi-face guard during face scan
+- Resync Faces (force-recompute all descriptors)
 - Auto attendance mark on access granted
 - Duplicate prevention (same member, same day)
-- Today's attendance log
-- Attendance history with date picker
+- Today's attendance log with member photo
+- Attendance history with date picker and member photo
 - Search history by name or phone
 - Total records counter
 - Empty state handling
 - Auto-clear input + refocus after scan
 
+### Reports
+
+- Revenue, member growth, attendance, pending payments, expiring members, and trainer-load reports
+- Filters per report
+- PDF and CSV export
+
 ### Storage
 
 - SQLite local database
 - Tables: members, trainers, attendance, settings, auth_session
+- `members.faceDescriptor` column for cached face embeddings
 - Data persists across restarts
 
 ### WhatsApp Integration
@@ -86,6 +106,7 @@
 - Gym name configuration
 - Plan configuration (Monthly, 3 Months, 6 Months, 1 Year)
 - Onboarding wizard for first-time setup
+- Face-scan match threshold tuning
 
 ---
 
@@ -93,7 +114,7 @@
 
 | Key | Value |
 |-----|-------|
-| Current Stable Version | v0.3.0 |
+| Current Stable Version | v0.3.0 (Sprint 6B changes in working tree, not yet tagged) |
 | Branch | main |
 
 ---
@@ -102,9 +123,6 @@
 
 | Sprint | Module | Description |
 |--------|--------|-------------|
-| Sprint 4 | Membership & Billing | Renewal flow, expiry alerts, payment tracking |
-| Sprint 5 | Dashboard | Stats, charts, membership overview |
-| Sprint 6 | Reports | Attendance reports, revenue reports |
 | Sprint 7 | Backup | Database backup & restore |
 | Sprint 8 | WhatsApp Automation | Scheduled reminders, bulk messaging |
 | Sprint 9 | Installer | Windows installer, production packaging |
@@ -115,11 +133,11 @@
 
 - Edit Trainer (only Add/Delete exists)
 - Check-out mechanism for attendance
-- Attendance export/download
-- Monthly attendance reports
+- Monthly attendance reports (beyond the existing filtered attendance report)
 - Age range validation (0-100)
 - UNIQUE constraint on phone columns (enforced at app level only)
 - Cross-module phone duplicate check (member vs trainer)
+- Face-scan liveness detection (currently a convenience check, not secure identity proof)
 
 ---
 

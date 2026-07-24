@@ -26,9 +26,34 @@ export const UIProvider = ({ children }) => {
   }, []);
 
   // ─── Confirm API (Promise-based) ────────────────────────
+  // BUG FIX: showConfirm previously overwrote confirmResolveRef.current on
+  // every call with no guard, so calling it again while a confirmation was
+  // already pending (e.g. a delete menu item clicked more than once before
+  // the dialog/dropdown visually closed) silently orphaned the earlier
+  // promise (it never resolved) and reset the dialog. Combined with
+  // ConfirmDialog's buttons not disabling themselves after the first click,
+  // a fast double/triple/quadruple click on Confirm could invoke onConfirm
+  // more than once before React removed the dialog from the DOM, sending
+  // the underlying IPC action (e.g. "delete-member") more than once — each
+  // legitimately replied to once by main.js, producing one real toast per
+  // send and stacking up exactly like duplicate notifications. Guarding both
+  // ends (one confirm in flight at a time here, and disabling the dialog's
+  // buttons after the first click in ConfirmDialog.jsx) closes this
+  // regardless of how many extra clicks arrive.
+  const confirmPendingRef = useRef(false);
+
   const showConfirm = useCallback((message) => {
+    if (confirmPendingRef.current) {
+      // A confirmation is already in flight — ignore this call rather than
+      // orphaning the previous promise or resetting the visible dialog.
+      return Promise.resolve(false);
+    }
+    confirmPendingRef.current = true;
     return new Promise((resolve) => {
-      confirmResolveRef.current = resolve;
+      confirmResolveRef.current = (value) => {
+        confirmPendingRef.current = false;
+        resolve(value);
+      };
       setConfirmState({ message });
     });
   }, []);

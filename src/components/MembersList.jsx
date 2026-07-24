@@ -35,6 +35,19 @@ const MembersList = () => {
   const [isEditCaptureOpen, setIsEditCaptureOpen] = useState(false);
   const [editFaceDescriptorState, setEditFaceDescriptorState] = useState("idle"); // idle|computing|ready|no-face|error
 
+  // BUG FIX: guards against a mutation (delete/update/renew) being sent more
+  // than once for the same in-flight action — e.g. a rapid double-click on
+  // "Delete"/"Save Changes"/"Confirm Renewal" before the response arrives and
+  // the UI updates. Each send that main.js receives gets its own legitimate
+  // reply and its own toast, so multiple sends show up as stacked duplicate
+  // notifications even though no single response was ever duplicated.
+  // Tracks the specific member id(s) currently being deleted, and whether an
+  // update/renew is currently in flight (only one edit/renewal modal can be
+  // open at a time, so a single flag is sufficient for those).
+  const pendingDeleteIdsRef = useRef(new Set());
+  const pendingUpdateRef = useRef(false);
+  const pendingRenewRef = useRef(false);
+
   const MENU_HEIGHT = 180; // approximate max dropdown height in px
 
   const toggleMenu = useCallback((memberId) => {
@@ -85,11 +98,41 @@ const MembersList = () => {
     };
   };
 
+  // BUG 2 FIX: renders the member's registered photo (member.photo, a base64
+  // JPEG data URL persisted by main.js's add-member/update-member handlers)
+  // when present, falling back to the existing initial-letter avatar
+  // otherwise. Previously this component only ever rendered the
+  // initial-letter avatar — member.photo was read (to show the "no face
+  // detected" badge) but never bound to an <img>, so the profile photo
+  // appeared empty even though it was stored and broadcast correctly end to
+  // end (verified in main.js's SELECT * / gymStore.js's response handler).
+  const MemberAvatar = ({ member, className }) => {
+    const avatar = getAvatarStyles(member.name);
+    if (member.photo) {
+      return (
+        <img
+          src={member.photo}
+          alt={`${member.name || "Member"} photo`}
+          className={`${className} object-cover rounded-full border border-slate-200 bg-slate-100`}
+        />
+      );
+    }
+    return (
+      <div
+        className={`${className} rounded-full flex items-center justify-center font-black shadow-inner ${avatar.colorClass}`}
+        aria-hidden="true"
+      >
+        {avatar.letter}
+      </div>
+    );
+  };
+
   // Listen for mutation responses (update/delete) — these are component-specific actions
   useEffect(() => {
     if (!windowElectron) return;
 
     const handleUpdateResponse = (_e, arg) => {
+      pendingUpdateRef.current = false;
       if (arg.success) {
         showToast("Member updated successfully!", "success");
         setEditingId(null);
@@ -100,6 +143,15 @@ const MembersList = () => {
     };
 
     const handleDeleteResponse = (_e, arg) => {
+      // main.js's delete-member-response carries no member id to correlate
+      // against, but IPC on a single channel is delivered in send order, so
+      // popping the oldest still-pending id off the set here is enough to
+      // keep the "how many deletes are actually in flight" count accurate —
+      // the guard at the send site (triggerDelete) is what actually prevents
+      // the same id from being sent twice; this just keeps bookkeeping
+      // consistent so a later real delete for that id isn't blocked forever.
+      const [firstPending] = pendingDeleteIdsRef.current;
+      if (firstPending !== undefined) pendingDeleteIdsRef.current.delete(firstPending);
       if (arg.success) {
         showToast("Member deleted successfully.", "success");
         refreshAll();
@@ -109,6 +161,7 @@ const MembersList = () => {
     };
 
     const handleRenewResponse = (_e, arg) => {
+      pendingRenewRef.current = false;
       if (arg.success) {
         showToast("Membership renewed successfully!", "success");
         setRenewMember(null);
@@ -176,19 +229,38 @@ const MembersList = () => {
   };
 
   const triggerDelete = async (id) => {
+    // BUG FIX: block a second delete for the same id while one is already
+    // in flight (e.g. rapid double-click before the confirm dialog/menu
+    // closes) — see the pendingDeleteIdsRef comment above.
+    if (pendingDeleteIdsRef.current.has(id)) return;
+
     const confirmed = await showConfirm("Delete this record permanently?");
     if (confirmed) {
-      if (windowElectron) windowElectron.ipcRenderer.send("delete-member", id);
+      if (windowElectron) {
+        pendingDeleteIdsRef.current.add(id);
+        windowElectron.ipcRenderer.send("delete-member", id);
+      }
     }
   };
 
   const triggerFreeze = (member) => {
+    // BUG FIX: this send was never guarded against rapid repeat clicks (the
+    // dropdown menu item calls this directly with no confirm step in
+    // between), so multiple fast clicks each sent their own "update-member"
+    // IPC message — each legitimately replied to once by main.js, stacking
+    // up as duplicate "Member updated successfully!" toasts exactly like the
+    // guarded handleSaveEdit path already prevented. Shares the same
+    // pendingUpdateRef guard/response handler as the edit-details flow since
+    // both ultimately hit "update-member-response".
+    if (pendingUpdateRef.current) return;
     const newStatus = member.status === "Frozen" ? "Active" : "Frozen";
-    if (windowElectron)
+    if (windowElectron) {
+      pendingUpdateRef.current = true;
       windowElectron.ipcRenderer.send("update-member", {
         ...member,
         status: newStatus,
       });
+    }
   };
 
   const startEdit = (member) => {
@@ -246,7 +318,11 @@ const MembersList = () => {
     if (!/^\d{10}$/.test(trimmedPhone))
       return showToast("Mobile number must be exactly 10 digits (numeric only).", "error");
 
+    // BUG FIX: block a second submit while this edit is already in flight.
+    if (pendingUpdateRef.current) return;
+
     if (windowElectron) {
+      pendingUpdateRef.current = true;
       windowElectron.ipcRenderer.send("update-member", {
         id: editForm.id,
         name: trimmedName,
@@ -314,6 +390,9 @@ const MembersList = () => {
   };
 
   const handleRenew = () => {
+    // BUG FIX: block a second submit while this renewal is already in flight.
+    if (pendingRenewRef.current) return;
+
     if (!renewForm.amountPaid && renewForm.amountPaid !== 0) {
       return showToast("Amount Paid is required for renewal.", "error");
     }
@@ -335,6 +414,7 @@ const MembersList = () => {
     }
 
     if (windowElectron) {
+      pendingRenewRef.current = true;
       windowElectron.ipcRenderer.send("renew-member", {
         id: renewMember.id,
         plan: renewForm.plan,
@@ -412,7 +492,6 @@ const MembersList = () => {
             </thead>
             <tbody className="text-xs font-semibold divide-y divide-slate-100 text-slate-700">
               {filteredMembers.map((member) => {
-                const avatar = getAvatarStyles(member.name);
                 const coach = getTrainerBadge(member.assignedTrainerId);
                 const isEditing = editingId === member.id;
 
@@ -528,12 +607,16 @@ const MembersList = () => {
                     className="hover:bg-slate-50/30 transition-all"
                   >
                     <td className="py-4 px-4 sm:px-6">
-                      <div className="flex items-center space-x-3.5">
-                        <div
-                          className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex items-center justify-center font-black text-xs shadow-inner ${avatar.colorClass}`}
-                        >
-                          {avatar.letter}
-                        </div>
+                      <button
+                        type="button"
+                        onClick={() => setDetailsId(detailsId === member.id ? null : member.id)}
+                        className="flex items-center space-x-3.5 text-left rounded-lg -m-1 p-1 hover:bg-slate-100/70 transition-all cursor-pointer"
+                        title="Click to view full profile"
+                      >
+                        <MemberAvatar
+                          member={member}
+                          className="w-9 h-9 sm:w-10 sm:h-10 shrink-0 text-xs"
+                        />
                         <div>
                           <p className="font-extrabold text-slate-900 text-sm truncate max-w-[120px]">
                             {member.name}
@@ -550,7 +633,7 @@ const MembersList = () => {
                             </span>
                           )}
                         </div>
-                      </div>
+                      </button>
                     </td>
 
                     <td className="py-4 px-4 sm:px-6">
@@ -674,7 +757,23 @@ const MembersList = () => {
                   {detailsId === member.id && (
                     <tr className="bg-slate-50/50">
                       <td colSpan="5" className="px-6 py-4">
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3 text-xs">
+                        <div className="flex flex-col sm:flex-row gap-5">
+                          <div className="shrink-0 flex sm:flex-col items-center gap-3">
+                            <MemberAvatar member={member} className="w-20 h-20 text-2xl" />
+                            {!member.photo && (
+                              <span className="text-[10px] text-slate-400 font-bold text-center max-w-[80px]">
+                                No photo on file
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => { startEdit(member); setDetailsId(null); }}
+                              className="bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-black px-3 py-1.5 rounded-lg shadow-sm transition-all flex items-center gap-1 whitespace-nowrap"
+                            >
+                              🖊️ Edit Details
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-3 text-xs flex-1">
                           <div>
                             <span className="text-slate-400 font-bold block">Plan</span>
                             <span className="text-slate-800 font-black">{member.plan || "—"}</span>
@@ -710,6 +809,7 @@ const MembersList = () => {
                           <div>
                             <span className="text-slate-400 font-bold block">Amount Pending</span>
                             <span className={`font-black font-mono ${Number(member.amountPending) > 0 ? "text-rose-500" : "text-slate-500"}`}>₹{member.amountPending || "0"}</span>
+                          </div>
                           </div>
                         </div>
                       </td>
